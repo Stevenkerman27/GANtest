@@ -6,8 +6,8 @@ import numpy as np
 
 def generate_and_evaluate(user_label_list=None):
     if user_label_list is None:
-        # 默认的用户自定义标签: [Alpha, Re, Cl, Cd, Cm] (根据经验猜测)
-        user_label_list = [2.0, 200000.0, 0.6, 0.014, -0.073]
+        # 默认的用户自定义标签: [Alpha, Re, Cl, Cm]
+        user_label_list = [2.0, 200000.0, 0.6, -0.073]
         
     print(f"User defined label: {user_label_list}")
     
@@ -17,7 +17,13 @@ def generate_and_evaluate(user_label_list=None):
         config = yaml.safe_load(f)
         
     # 初始化设备
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device_cfg = config.get("device", "auto")
+    if device_cfg.lower() == "cuda" and torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif device_cfg.lower() == "cpu":
+        device = torch.device("cpu")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
     # 实例化模型
@@ -84,6 +90,6 @@ def generate_and_evaluate(user_label_list=None):
         print(f"Saved generated airfoil {i+1}/5 to {filepath} with Discriminator score: {score:.6f}")
 
 if __name__ == '__main__':
-    # 用户可以在此修改标签: [alpha, Re, Cl, Cd, Cm]
-    custom_label = [5.0, 400000.0, 0.8, 0.02, -0.06]
+    # 用户可以在此修改标签: [alpha, Re, Cl, Cm]
+    custom_label = [5.0, 400000.0, 0.8, -0.06]
     generate_and_evaluate(custom_label)

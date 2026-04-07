@@ -1,5 +1,6 @@
 Chinese character involved in this project, mind encoding!
 使用myml python环境,位于D:\Software\anaconda\envs\myml
+我需要你帮助我开发CWGAN-GP的翼型设计神经网络。神经网络中包含贝塞尔曲线层
 当前终端为powershell 5.1
 
 开发规则：

@@ -24,10 +24,9 @@ def center_dense_spacing(M, s_le=0.5, beta=2.0):
     return t
 
 class BezierDecoderLayer(nn.Module):
-    def __init__(self, config_path="config.yaml"):
+    def __init__(self, config):
         super().__init__()
-        with open(config_path, 'r', encoding='utf-8') as f:
-            self.config = yaml.safe_load(f)
+        self.config = config
         self.num_control_points = self.config['num_control_points']
         self.num_output_points = self.config['num_output_points']
         self.point_density_beta = self.config['point_density_beta']
@@ -73,11 +72,16 @@ class Generator(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.noise_dim = config.get('noise_dimension')
-        self.cond_dim = 5
+        self.cond_dim = config.get('cond_dim')
         self.hid_node = config.get('gen_hid_node')
         self.hid_layer = config.get('gen_hid_layer')
         
-        act_fun = nn.LeakyReLU(0.2)
+        act_fun_name = config.get('gen_hid_fun')
+        if act_fun_name in ('LeakyRELU', 'LeakyReLU'):
+            act_fun = nn.LeakyReLU(0.2)
+        else:
+            act_fun = getattr(nn, act_fun_name)()
+            
         layers = []
         in_dim = self.noise_dim + self.cond_dim
         for _ in range(self.hid_layer):
@@ -89,7 +93,7 @@ class Generator(nn.Module):
         
         self.num_cp = config.get('num_control_points')
         self.out_layer = nn.Linear(self.hid_node, self.num_cp * 3)
-        self.bezier_layer = BezierDecoderLayer()
+        self.bezier_layer = BezierDecoderLayer(config)
 
     def forward(self, noise, cond):
         x = torch.cat([noise, cond], dim=1)
@@ -114,7 +118,7 @@ class Generator(nn.Module):
 class Discriminator(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.cond_dim = 5
+        self.cond_dim = config.get('cond_dim')
         self.num_pts = config.get('num_output_points')
         self.input_dim = self.num_pts * 2
         self.hid_node = config.get('gen_hid_node')
@@ -130,7 +134,11 @@ class Discriminator(nn.Module):
                                kernel_size=self.kernel_size, 
                                padding=self.kernel_size // 2)
         
-        act_fun = nn.LeakyReLU(0.2)
+        act_fun_name = config.get('gen_hid_fun')
+        if act_fun_name in ('LeakyRELU', 'LeakyReLU'):
+            act_fun = nn.LeakyReLU(0.2)
+        else:
+            act_fun = getattr(nn, act_fun_name)()
             
         layers = []
         # First FC layer input = (conv_channels * num_pts) + cond_dim

@@ -8,7 +8,7 @@ import glob
 # Define relative paths from foildata/
 COORD_DIR = "processed_foil"
 POLAR_DIR = "polars"
-foil_n = 200
+foil_n = 400
 
 # Ensure output directory exists
 os.makedirs(os.path.join(os.path.dirname(__file__), POLAR_DIR), exist_ok=True)
@@ -16,7 +16,7 @@ os.makedirs(os.path.join(os.path.dirname(__file__), POLAR_DIR), exist_ok=True)
 def load_config():
     root_dir = os.path.dirname(os.path.dirname(__file__))
     config_path = os.path.join(root_dir, "config.yaml")
-    with open(config_path, 'r') as f:
+    with open(config_path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
 
 def get_re_list(config):
@@ -68,8 +68,14 @@ def run_xfoil(airfoil_name, reynolds, alpha_start, alpha_end, alpha_step):
         cwd=os.path.join(base_dir, COORD_DIR)
     )
     
-    stdout, stderr = process.communicate(input=commands)
-    return stdout
+    try:
+        stdout, stderr = process.communicate(input=commands, timeout=30)
+        return stdout
+    except subprocess.TimeoutExpired:
+        print(f"警告: {airfoil_name} 在 Re={reynolds} 下计算超时(30秒)，已中断并跳过")
+        process.kill()
+        stdout, stderr = process.communicate()
+        return stdout
 
 if __name__ == "__main__":
     config = load_config()

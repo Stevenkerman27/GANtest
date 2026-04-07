@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 def plot_label_statistics(data_list, output_path="model/label_statistics.png"):
     """
-    绘制 CL, CD, CM 的箱线图，并叠加所有原始数据点。
+    绘制 CL, CM 的箱线图，并叠加所有原始数据点。
     """
     if not data_list:
         print("警告: 数据集为空，跳过统计图绘制。")
@@ -15,11 +15,11 @@ def plot_label_statistics(data_list, output_path="model/label_statistics.png"):
         
     y_labels = torch.stack([d["y"] for d in data_list]).numpy()
     coeffs = y_labels[:, 2:] 
-    label_names = ['CL', 'CD', 'CM']
+    label_names = ['CL', 'CM']
     
-    plt.figure(figsize=(15, 6))
-    for i in range(3):
-        plt.subplot(1, 3, i+1)
+    plt.figure(figsize=(12, 6))
+    for i in range(2):
+        plt.subplot(1, 2, i+1)
         
         # 1. 绘制箱线图 (关闭离群点显示 showfliers=False，因为我们要手动画所有点)
         plt.boxplot(coeffs[:, i], widths=0.5, showfliers=False, 
@@ -123,13 +123,13 @@ def prepare_dataset(processed_foil_dir, polars_dir, output_file="airfoil_dataset
             coords_flat = coords.flatten()
             x_tensor = torch.tensor(coords_flat, dtype=torch.float32)
             
-            # 标签：alpha, Re, CL, CD, CM (1D 张量)
-            y_tensor = torch.tensor([alpha, Re, CL, CD, CM], dtype=torch.float32)
+            # 标签：alpha, Re, CL, CM (1D 张量)
+            y_tensor = torch.tensor([alpha, Re, CL, CM], dtype=torch.float32)
             
             # 保存到数据集列表中
             data_list.append({
                 "x": x_tensor,            # [x1, x2, ..., y1, y2, ...]
-                "y": y_tensor             # [alpha, Re, CL, CD, CM]
+                "y": y_tensor             # [alpha, Re, CL, CM]
             })
             
     print(f"\n数据集准备完成！总共收集了 {len(data_list)} 个样本。")
@@ -146,7 +146,7 @@ if __name__ == '__main__':
     config_path = "config.yaml"
     max_cd = None
     if os.path.exists(config_path):
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
             max_cd = config.get('max_Cd')
             if max_cd is not None:

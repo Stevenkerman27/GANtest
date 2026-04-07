@@ -37,25 +37,32 @@ def train():
     with open("config.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device_cfg = config.get("device", "auto")
+    if device_cfg.lower() == "cuda" and torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif device_cfg.lower() == "cpu":
+        device = torch.device("cpu")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
     # Dataset & DataLoader
+    batch_size = config.get('batch_size', 16)
     dataset = AirfoilDataset("model/airfoil_dataset.pt")
-    dataloader = DataLoader(dataset, batch_size=16, shuffle=True, drop_last=True)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
     # Initialize models
     generator = Generator(config).to(device)
     discriminator = Discriminator(config).to(device)
 
     # Optimizers (WGAN-GP uses Adam with beta1=0, beta2=0.9 usually)
-    lr = 1e-4
+    lr = float(config.get('lr', 1e-4))
     optimizer_G = torch.optim.Adam(generator.parameters(), lr=lr, betas=(0.0, 0.9))
     optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=lr, betas=(0.0, 0.9))
 
-    epochs = 120
-    n_critic = 3
-    lambda_gp = 10
+    epochs = config.get('epochs', 120)
+    n_critic = config.get('n_critic', 3)
+    lambda_gp = config.get('lambda_gp', 10)
 
     # Lists to keep track of progress
     d_losses = []
@@ -101,8 +108,12 @@ def train():
             if i % n_critic == 0:
                 optimizer_G.zero_grad()
 
+                # Generate a new batch of noise for the generator update
+                z_gen = torch.randn(batch_size, config.get('noise_dimension')).to(device)
+                
                 # Generate a batch of foils
-                fake_foil = generator(z, conds)
+                fake_foil = generator(z_gen, conds)
+                
                 # Loss measures generator's ability to fool the discriminator
                 fake_validity = discriminator(fake_foil, conds)
                 g_loss = -torch.mean(fake_validity)

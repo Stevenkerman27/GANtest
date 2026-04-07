@@ -37,7 +37,10 @@ FILES_TO_DELETE = [
     "as6098.dat",
     "as6099.dat",
     "goe531.dat",
-    "ua2-180.dat"
+    "ua2-180.dat",
+    "s1221.dat",
+    "goe451.dat",
+    "dsma523a.dat"
 ]
 
 def manage_files():
