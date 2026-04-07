@@ -115,15 +115,29 @@ class Discriminator(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.cond_dim = 5
-        self.input_dim = config.get('num_output_points') * 2
+        self.num_pts = config.get('num_output_points')
+        self.input_dim = self.num_pts * 2
         self.hid_node = config.get('gen_hid_node')
         self.hid_layer = config.get('gen_hid_layer')
+        
+        # Conv layer parameters
+        self.conv_channels = config.get('disc_conv_channels')
+        self.kernel_size = config.get('disc_conv_kernel')
+        
+        # Stage 1: Convolutional Feature Extraction
+        self.conv1 = nn.Conv1d(in_channels=2, 
+                               out_channels=self.conv_channels, 
+                               kernel_size=self.kernel_size, 
+                               padding=self.kernel_size // 2)
         
         act_fun = nn.LeakyReLU(0.2)
             
         layers = []
-        in_dim = self.input_dim + self.cond_dim
-        for _ in range(self.hid_layer):
+        # First FC layer input = (conv_channels * num_pts) + cond_dim
+        in_dim = (self.conv_channels * self.num_pts) + self.cond_dim
+        
+        # Remaining hidden layers (hid_layer - 1 more since we replaced the first one with Conv)
+        for _ in range(self.hid_layer - 1):
             layers.append(nn.Linear(in_dim, self.hid_node))
             layers.append(act_fun)
             in_dim = self.hid_node
@@ -132,6 +146,19 @@ class Discriminator(nn.Module):
         self.fc_blocks = nn.Sequential(*layers)
 
     def forward(self, coords, cond):
-        x = torch.cat([coords, cond], dim=1)
+        # coords: (Batch, M*2) -> (Batch, M, 2) -> (Batch, 2, M)
+        batch_size = coords.size(0)
+        x = coords.view(batch_size, self.num_pts, 2).permute(0, 2, 1)
+        
+        # Conv + Activation
+        x = torch.nn.functional.leaky_relu(self.conv1(x), 0.2)
+        
+        # Flatten: (Batch, out_channels, M) -> (Batch, out_channels * M)
+        x = x.view(batch_size, -1)
+        
+        # Concat with conditions
+        x = torch.cat([x, cond], dim=1)
+        
+        # FC blocks
         validity = self.fc_blocks(x)
         return validity

@@ -53,7 +53,7 @@ def train():
     optimizer_G = torch.optim.Adam(generator.parameters(), lr=lr, betas=(0.0, 0.9))
     optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=lr, betas=(0.0, 0.9))
 
-    epochs = 200
+    epochs = 120
     n_critic = 3
     lambda_gp = 10
 
