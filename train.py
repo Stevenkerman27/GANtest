@@ -7,8 +7,7 @@ import matplotlib.pyplot as plt
 from model import Generator, Discriminator
 from dataset import AirfoilDataset
 from foildata.xfoil import run_xfoil_single
-from utils import calculate_relative_thickness, check_intersection
-
+from utils import calculate_relative_thickness, check_intersection, check_shape_intersections
 
 def compute_gradient_penalty(D, real_samples, fake_samples, conds, device):
     """Calculates the gradient penalty loss for WGAN GP"""
@@ -78,8 +77,8 @@ def evaluate_physics(fake_foils, conds, norm_stats, eps):
             f_idx.append(i)
             continue
 
-        # Check for self-intersection
-        if check_intersection(coords):
+        # Check for self-intersection and shape constraints
+        if check_intersection(coords) or check_shape_intersections(coords):
             f_idx.append(i)
             continue
         

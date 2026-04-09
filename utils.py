@@ -70,3 +70,37 @@ def check_intersection(coords):
     
     return np.any(intersect & mask)
 
+def check_shape_intersections(coords):
+    """
+    Check if the airfoil shape is valid based on ray intersections.
+    - Any vertical line should intersect the curve at most 2 times.
+    - Any horizontal line should intersect the curve at most 4 times.
+    Returns True if the shape is INVALID (fails the check), False if valid.
+    """
+    x = coords[:, 0]
+    y = coords[:, 1]
+    
+    # vertical lines
+    x_sorted = np.unique(x)
+    x_test = (x_sorted[:-1] + x_sorted[1:]) / 2.0
+    x1 = x[:-1]
+    x2 = x[1:]
+    
+    for c in x_test:
+        intersections = np.sum((x1 - c) * (x2 - c) < 0)
+        if intersections > 2:
+            return True
+            
+    # horizontal lines
+    y_sorted = np.unique(y)
+    y_test = (y_sorted[:-1] + y_sorted[1:]) / 2.0
+    y1 = y[:-1]
+    y2 = y[1:]
+    
+    for c in y_test:
+        intersections = np.sum((y1 - c) * (y2 - c) < 0)
+        if intersections > 4:
+            return True
+            
+    return False
+
