@@ -6,8 +6,8 @@ import numpy as np
 
 def generate_and_evaluate(user_label_list=None):
     if user_label_list is None:
-        # 默认的用户自定义标签: [Alpha, Re, Cl, Cm]
-        user_label_list = [2.0, 200000.0, 0.6, -0.073]
+        # 默认的用户自定义标签: [Alpha, Re, Cl, Thickness]
+        user_label_list = [2.0, 200000.0, 0.6, 0.12]
         
     print(f"User defined label: {user_label_list}")
     
@@ -90,6 +90,6 @@ def generate_and_evaluate(user_label_list=None):
         print(f"Saved generated airfoil {i+1}/5 to {filepath} with Discriminator score: {score:.6f}")
 
 if __name__ == '__main__':
-    # 用户可以在此修改标签: [alpha, Re, Cl, Cm]
-    custom_label = [5.0, 400000.0, 0.8, -0.06]
+    # 用户可以在此修改标签: [alpha, Re, Cl, Thickness]
+    custom_label = [5.0, 400000.0, 0.8, 0.15]
     generate_and_evaluate(custom_label)

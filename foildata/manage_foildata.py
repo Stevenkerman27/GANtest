@@ -5,11 +5,12 @@ import numpy as np
 from scipy.interpolate import interp1d
 import yaml
 
-# Add root directory to sys.path to import model
+# Add root directory to sys.path to import model and utils
 root_dir = Path(__file__).parent.parent
 sys.path.append(str(root_dir))
 
 from model import center_dense_spacing
+from utils import calculate_relative_thickness
 
 # Configuration
 FILES_TO_DELETE = [
@@ -141,25 +142,9 @@ def resample_single_airfoil(file_path, target_dir, num_points, beta=2.0, output_
         x = coords[:, 0]
         y = coords[:, 1]
 
-        # Calculate relative thickness
-        idx_le = np.argmin(x)
-        x_le, x_max = np.min(x), np.max(x)
-        chord = x_max - x_le
-        if chord > 0:
-            surf1_x, surf1_y = x[:idx_le+1], y[:idx_le+1]
-            surf2_x, surf2_y = x[idx_le:], y[idx_le:]
-            x_test = np.linspace(x_le, x_max, 101)
-            # Sort to ensure monotonic x for interpolation
-            s1 = np.argsort(surf1_x)
-            s2 = np.argsort(surf2_x)
-            y1_interp = np.interp(x_test, surf1_x[s1], surf1_y[s1])
-            y2_interp = np.interp(x_test, surf2_x[s2], surf2_y[s2])
-            rel_thickness = np.max(np.abs(y1_interp - y2_interp)) / chord
-            
-            if rel_thickness > 0.20:
-                return "thick", rel_thickness
-        else:
-            rel_thickness = 0
+        rel_thickness = calculate_relative_thickness(coords)
+        if rel_thickness > 0.20:
+            return "thick", rel_thickness
         
         # Calculate cumulative arc length
         dx = np.diff(x)

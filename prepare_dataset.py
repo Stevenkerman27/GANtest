@@ -4,10 +4,11 @@ import torch
 import yaml
 import numpy as np
 import matplotlib.pyplot as plt
+from utils import calculate_relative_thickness
 
 def plot_label_statistics(data_list, output_path="model/label_statistics.png"):
     """
-    绘制 CL, CM 的箱线图，并叠加所有原始数据点。
+    绘制 CL, Thickness 的箱线图，并叠加所有原始数据点。
     """
     if not data_list:
         print("警告: 数据集为空，跳过统计图绘制。")
@@ -15,7 +16,7 @@ def plot_label_statistics(data_list, output_path="model/label_statistics.png"):
         
     y_labels = torch.stack([d["y"] for d in data_list]).numpy()
     coeffs = y_labels[:, 2:] 
-    label_names = ['CL', 'CM']
+    label_names = ['CL', 'Thickness']
     
     plt.figure(figsize=(12, 6))
     for i in range(2):
@@ -110,8 +111,7 @@ def prepare_dataset(processed_foil_dir, polars_dir, output_file="airfoil_dataset
                 alpha = float(vals[0])
                 CL = float(vals[1])
                 CD = float(vals[2])
-                # vals[3] 是 CDp，跳过
-                CM = float(vals[4])
+                # CM = float(vals[4]) # No longer used as condition
             except ValueError:
                 continue
 
@@ -119,17 +119,20 @@ def prepare_dataset(processed_foil_dir, polars_dir, output_file="airfoil_dataset
             if max_cd is not None and CD > max_cd:
                 continue
                 
+            # 计算翼型相对厚度
+            thickness = calculate_relative_thickness(coords)
+            
             # 展平拼接为 1D 张量 (仅坐标), 采用 x,y,x,y顺序
             coords_flat = coords.flatten()
             x_tensor = torch.tensor(coords_flat, dtype=torch.float32)
             
-            # 标签：alpha, Re, CL, CM (1D 张量)
-            y_tensor = torch.tensor([alpha, Re, CL, CM], dtype=torch.float32)
+            # 标签：alpha, Re, CL, Thickness (1D 张量)
+            y_tensor = torch.tensor([alpha, Re, CL, thickness], dtype=torch.float32)
             
             # 保存到数据集列表中
             data_list.append({
                 "x": x_tensor,            # [x1, x2, ..., y1, y2, ...]
-                "y": y_tensor             # [alpha, Re, CL, CM]
+                "y": y_tensor             # [alpha, Re, CL, Thickness]
             })
             
     print(f"\n数据集准备完成！总共收集了 {len(data_list)} 个样本。")
