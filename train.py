@@ -36,8 +36,9 @@ def compute_gradient_penalty(D, real_samples, fake_samples, conds, device):
     )[0]
     
     gradients = gradients.view(gradients.size(0), -1)
-    gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
-    return gradient_penalty
+    grad_norm = gradients.norm(2, dim=1)
+    gradient_penalty = ((grad_norm - 1) ** 2).mean()
+    return gradient_penalty, grad_norm.mean().item()
 
 def evaluate_physics(fake_foils, conds, norm_stats, eps):
     """
@@ -150,6 +151,9 @@ def train():
     for epoch in range(epochs):
         epoch_d_loss = 0.0
         epoch_g_loss = 0.0
+        epoch_real_score = 0.0
+        epoch_fake_score = 0.0
+        epoch_grad_norm = 0.0
         batch_count = 0
         g_batch_count = 0
         
@@ -204,7 +208,7 @@ def train():
             fake_validity = discriminator(f_foils, f_conds)
             
             # Gradient penalty
-            gradient_penalty = compute_gradient_penalty(
+            gradient_penalty, grad_norm = compute_gradient_penalty(
                 discriminator, 
                 combined_real_foils, 
                 f_foils[:combined_real_foils.size(0)],
@@ -219,6 +223,9 @@ def train():
             optimizer_D.step()
             
             epoch_d_loss += d_loss.item()
+            epoch_real_score += torch.mean(real_validity).item()
+            epoch_fake_score += torch.mean(fake_validity).item()
+            epoch_grad_norm += grad_norm
             batch_count += 1
 
             # -----------------
@@ -240,8 +247,8 @@ def train():
                     f_foil_gen = fake_foil[f_idx_gen]
                     f_conds_gen = conds[f_idx_gen]
                     
-                    fake_validity = discriminator(f_foil_gen, f_conds_gen)
-                    g_loss = -torch.mean(fake_validity)
+                    fake_validity_gen = discriminator(f_foil_gen, f_conds_gen)
+                    g_loss = -torch.mean(fake_validity_gen)
 
                     g_loss.backward()
                     optimizer_G.step()
@@ -255,6 +262,9 @@ def train():
         # Calculate average loss and validity for the epoch
         avg_d_loss = epoch_d_loss / batch_count
         avg_g_loss = epoch_g_loss / g_batch_count if g_batch_count > 0 else 0
+        avg_real_score = epoch_real_score / batch_count
+        avg_fake_score = epoch_fake_score / batch_count
+        avg_grad_norm = epoch_grad_norm / batch_count
         avg_validity = total_valid / total_samples
         
         d_losses.append(avg_d_loss)
@@ -263,6 +273,7 @@ def train():
 
         if epoch % 5 == 0:
             print(f"[Epoch {epoch}/{epochs}] [D loss: {avg_d_loss:.4f}] [G loss: {avg_g_loss:.4f}] [Validity: {avg_validity:.2%}]")
+            print(f"[Critic Real: {avg_real_score:.4f}] [Critic Fake: {avg_fake_score:.4f}] [GP Norm: {avg_grad_norm:.4f}]")
 
     # Save models
     torch.save(generator.state_dict(), "model/generator.pth")
