@@ -106,6 +106,112 @@ def evaluate_physics(fake_foils, conds, norm_stats, eps):
             
     return r_idx, f_idx
 
+def run_lr_range_test(config, dataloader, device):
+    import matplotlib.pyplot as plt
+    print("--- Starting LR Range Test ---")
+    
+    # Initialize temporary models
+    generator = Generator(config).to(device)
+    discriminator = Discriminator(config).to(device)
+    
+    # Initialize temporary optimizers with starting lr
+    lr_start = 1e-7
+    lr_end = 10.0
+    optimizer_G = torch.optim.Adam(generator.parameters(), lr=lr_start, betas=(0.0, 0.9))
+    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=lr_start, betas=(0.0, 0.9))
+    
+    total_steps = len(dataloader)
+    if total_steps <= 1:
+        total_steps = 2 # Prevent division by zero if dataset is too small
+        
+    lambda_gp = config.get('lambda_gp', 10)
+    
+    lrs = []
+    d_losses_record = []
+    g_losses_record = []
+    
+    for i, (foils, conds) in enumerate(dataloader):
+        # Update learning rate (linear increase)
+        current_lr = lr_start + (lr_end - lr_start) * (i / (total_steps - 1))
+        for param_group in optimizer_G.param_groups:
+            param_group['lr'] = current_lr
+        for param_group in optimizer_D.param_groups:
+            param_group['lr'] = current_lr
+            
+        foils = foils.to(device)
+        conds = conds.to(device)
+        batch_size = foils.size(0)
+        
+        # ---------------------
+        #  Train Discriminator
+        # ---------------------
+        optimizer_D.zero_grad()
+        
+        z = torch.randn(batch_size, config.get('noise_dimension')).to(device)
+        fake_foils = generator(z, conds)
+        
+        real_validity = discriminator(foils, conds)
+        fake_validity = discriminator(fake_foils.detach(), conds)
+        
+        gradient_penalty, _ = compute_gradient_penalty(
+            discriminator, 
+            foils, 
+            fake_foils.detach(),
+            conds, 
+            device
+        )
+        
+        d_loss = -torch.mean(real_validity) + torch.mean(fake_validity) + lambda_gp * gradient_penalty
+        d_loss.backward()
+        optimizer_D.step()
+        
+        # -----------------
+        #  Train Generator
+        # -----------------
+        optimizer_G.zero_grad()
+        z_gen = torch.randn(batch_size, config.get('noise_dimension')).to(device)
+        fake_foil_gen = generator(z_gen, conds)
+        fake_validity_gen = discriminator(fake_foil_gen, conds)
+        g_loss = -torch.mean(fake_validity_gen)
+        g_loss.backward()
+        optimizer_G.step()
+        
+        lrs.append(current_lr)
+        d_losses_record.append(d_loss.item())
+        g_losses_record.append(g_loss.item())
+        
+        if i % 10 == 0:
+            print(f"[LR Test] Step {i}/{total_steps} - LR: {current_lr:.2e} - D Loss: {d_loss.item():.4f} - G Loss: {g_loss.item():.4f}")
+            
+    # Plotting
+    plt.figure(figsize=(10, 6))
+    plt.plot(lrs, d_losses_record, label='D Loss')
+    plt.plot(lrs, g_losses_record, label='G Loss')
+    plt.xscale('log')
+    plt.xlabel('Learning Rate (Log Scale)')
+    plt.ylabel('Loss')
+    plt.title('LR Range Test (1 Epoch)')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig('model/lr_range_test.png')
+    plt.close()
+    print("LR Range Test plot saved to model/lr_range_test.png")
+    
+    # User interaction
+    while True:
+        try:
+            user_lr = input("Please examine 'model/lr_range_test.png' and enter the selected learning rate for formal training: ")
+            final_lr = float(user_lr.strip())
+            if final_lr > 0:
+                break
+            else:
+                print("Learning rate must be positive.")
+        except ValueError:
+            print("Invalid input. Please enter a valid float number.")
+            
+    print(f"--- Proceeding to formal training with LR = {final_lr} ---")
+    return final_lr
+
 def train():
     with open("config.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
@@ -124,15 +230,6 @@ def train():
     dataset = AirfoilDataset("model/airfoil_dataset.pt")
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-    # Initialize models
-    generator = Generator(config).to(device)
-    discriminator = Discriminator(config).to(device)
-
-    # Optimizers (WGAN-GP uses Adam with beta1=0, beta2=0.9 usually)
-    lr = float(config.get('lr', 1e-4))
-    optimizer_G = torch.optim.Adam(generator.parameters(), lr=lr, betas=(0.0, 0.9))
-    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=lr, betas=(0.0, 0.9))
-
     epochs = config.get('epochs')
     pre_train_epoch = config.get('pre_train_epoch')
     n_critic = config.get('n_critic')
@@ -140,6 +237,17 @@ def train():
     
     # Load norm stats
     norm_stats = torch.load("model/cond_norm.pt", map_location=device, weights_only=True)
+
+    # --- Run LR Range Test ---
+    selected_lr = run_lr_range_test(config, dataloader, device)
+    
+    # Initialize formal models
+    generator = Generator(config).to(device)
+    discriminator = Discriminator(config).to(device)
+
+    # Optimizers for formal training
+    optimizer_G = torch.optim.Adam(generator.parameters(), lr=selected_lr, betas=(0.0, 0.9))
+    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=selected_lr, betas=(0.0, 0.9))
     eps_start = config.get('eps_start')
     eps_end = config.get('eps_end')
 
