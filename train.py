@@ -1,9 +1,11 @@
 import yaml
+import sys
 import torch
 from torch.utils.data import DataLoader
 import torch.autograd as autograd
 import numpy as np
 import matplotlib.pyplot as plt
+import argparse
 from model import Generator, Discriminator
 from dataset import AirfoilDataset
 from foildata.xfoil import run_xfoil_single
@@ -105,6 +107,51 @@ def evaluate_physics(fake_foils, conds, norm_stats, eps):
             f_idx.append(i)
             
     return r_idx, f_idx
+
+def save_checkpoint(generator, discriminator, epoch, path):
+    checkpoint = {
+        'generator_state_dict': generator.state_dict(),
+        'discriminator_state_dict': discriminator.state_dict(),
+        'epoch': epoch
+    }
+    torch.save(checkpoint, path)
+    print(f"Checkpoint saved to {path}")
+
+def plot_metrics(d_losses, g_losses, real_scores, fake_scores, grad_norms, path):
+    epochs_x = np.arange(len(d_losses))
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 15))
+    fig.tight_layout(pad=5.0)
+
+    # Loss Plot
+    ax1.plot(epochs_x, d_losses, label="D Loss")
+    ax1.plot(epochs_x, g_losses, label="G Loss")
+    ax1.set_title("WGAN-GP Training Loss")
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("Loss")
+    ax1.legend()
+    ax1.grid(True)
+
+    # Critic Scores Plot
+    ax2.plot(epochs_x, real_scores, label="Critic Real Score")
+    ax2.plot(epochs_x, fake_scores, label="Critic Fake Score")
+    ax2.set_title("Discriminator Scores")
+    ax2.set_xlabel("Epoch")
+    ax2.set_ylabel("Score")
+    ax2.legend()
+    ax2.grid(True)
+
+    # Gradient Penalty Norm Plot
+    ax3.plot(epochs_x, grad_norms, label="GP Norm", color='orange')
+    ax3.axhline(y=1.0, color='r', linestyle='--', alpha=0.3)
+    ax3.set_title("Gradient Penalty Norm")
+    ax3.set_xlabel("Epoch")
+    ax3.set_ylabel("Norm")
+    ax3.legend()
+    ax3.grid(True)
+
+    plt.savefig(path)
+    plt.close()
+    print(f"Training plots saved to {path}")
 
 import math
 
@@ -234,7 +281,7 @@ def run_lr_range_test(config, dataloader, device):
             
     return final_lr
 
-def train():
+def train(resume_path=None):
     with open("config.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
@@ -267,6 +314,16 @@ def train():
     generator = Generator(config).to(device)
     discriminator = Discriminator(config).to(device)
 
+    start_epoch = 0
+    if resume_path:
+        print(f"Loading pre-trained model from {resume_path}")
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
+        generator.load_state_dict(checkpoint['generator_state_dict'])
+        discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+        # Jump to physics training phase
+        start_epoch = pre_train_epoch
+        print(f"Skipping pre-training, starting from epoch {start_epoch}")
+
     # Optimizers for formal training
     optimizer_G = torch.optim.Adam(generator.parameters(), lr=selected_lr, betas=(0.0, 0.9))
     optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=selected_lr, betas=(0.0, 0.9))
@@ -276,9 +333,12 @@ def train():
     # Lists to keep track of progress
     d_losses = []
     g_losses = []
+    real_scores = []
+    fake_scores = []
+    grad_norms = []
     validity_history = []
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         epoch_d_loss = 0.0
         epoch_g_loss = 0.0
         epoch_real_score = 0.0
@@ -330,9 +390,11 @@ def train():
                 f_foils = fake_foils[f_idx].detach()
                 f_conds = conds[f_idx]
             else:
-                # If no unreasonable foils, fake_foils acts as F_eps to keep training going
-                f_foils = fake_foils.detach()
-                f_conds = conds
+                # If no unreasonable foils, it means the generator is performing perfectly for this batch
+                print("\n[Early Stopping] No unreasonable airfoils found in discriminator step. Training complete.")
+                save_checkpoint(generator, discriminator, epoch, "model/gan_final.pt")
+                plot_metrics(d_losses, g_losses, real_scores, fake_scores, grad_norms, "model/loss_curve.png")
+                sys.exit(0)
 
             real_validity = discriminator(combined_real_foils, combined_real_conds)
             fake_validity = discriminator(f_foils, f_conds)
@@ -386,8 +448,13 @@ def train():
                     epoch_g_loss += g_loss.item()
                     g_batch_count += 1
                 else:
-                    # All samples physically reasonable, skip generator update
-                    pass
+                    # All samples physically reasonable, terminate training as the goal is reached
+                    print("\n[Early Stopping] All generated samples are physically reasonable. Training complete.")
+                    # Save final models before exiting
+                    save_checkpoint(generator, discriminator, epoch, "model/gan_final.pt")
+                    plot_metrics(d_losses, g_losses, real_scores, fake_scores, grad_norms, "model/loss_curve.png")
+                    import sys
+                    sys.exit(0)
                 
         # Calculate average loss and validity for the epoch
         avg_d_loss = epoch_d_loss / batch_count
@@ -399,43 +466,31 @@ def train():
         
         d_losses.append(avg_d_loss)
         g_losses.append(avg_g_loss)
+        real_scores.append(avg_real_score)
+        fake_scores.append(avg_fake_score)
+        grad_norms.append(avg_grad_norm)
         validity_history.append(avg_validity)
 
         if epoch % 5 == 0:
             print(f"[Epoch {epoch}/{epochs}] [D loss: {avg_d_loss:.4f}] [G loss: {avg_g_loss:.4f}] [Validity: {avg_validity:.2%}]")
             print(f"[Critic Real: {avg_real_score:.4f}] [Critic Fake: {avg_fake_score:.4f}] [GP Norm: {avg_grad_norm:.4f}]")
 
+        # Check if pre-training is finished and save checkpoint
+        if epoch == pre_train_epoch - 1:
+            save_checkpoint(generator, discriminator, epoch, "model/pre_train.pt")
+            plot_metrics(d_losses, g_losses, real_scores, fake_scores, grad_norms, "model/pre_train_loss.png")
+            print(f"Pre-training finished. Checkpoint and plot saved.")
+
     # Save models
-    torch.save(generator.state_dict(), "model/generator.pth")
-    torch.save(discriminator.state_dict(), "model/discriminator.pth")
-    print("Training finished and models saved to model/generator.pth and model/discriminator.pth")
+    save_checkpoint(generator, discriminator, epochs - 1, "model/gan_final.pt")
+    plot_metrics(d_losses, g_losses, real_scores, fake_scores, grad_norms, "model/loss_curve.png")
+    print("Training finished and final model saved to model/gan_final.pt")
 
     # Plot and save final results
-    epochs_x = np.arange(len(d_losses))
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
-    fig.tight_layout(pad=5.0)
-
-    # Loss Plot
-    ax1.plot(epochs_x, d_losses, label="D Loss")
-    ax1.plot(epochs_x, g_losses, label="G Loss")
-    ax1.set_title("WGAN-GP Training Loss")
-    ax1.set_xlabel("Epoch")
-    ax1.set_ylabel("Loss")
-    ax1.legend()
-    ax1.grid(True)
-
-    # Validity Plot
-    ax2.plot(epochs_x, validity_history, label="Physics Validity Ratio", color='green')
-    ax2.axhline(y=1.0, color='r', linestyle='--', alpha=0.3)
-    ax2.set_title("Physics Validity Ratio")
-    ax2.set_xlabel("Epoch")
-    ax2.set_ylabel("Ratio")
-    ax2.set_ylim(-0.05, 1.05)
-    ax2.legend()
-    ax2.grid(True)
-
-    plt.savefig("model/loss_curve.png")
-    print("Final training plots saved to model/loss_curve.png")
+    # (Removed old plotting code as plot_metrics is now used)
 
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser(description="Train CWGAN-GP for airfoil design")
+    parser.add_argument("--resume", "-r", type=str, help="Path to pre-trained model checkpoint (.pt)")
+    args = parser.parse_args()
+    train(resume_path=args.resume)

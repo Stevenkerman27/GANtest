@@ -1,11 +1,12 @@
 import os
 import torch
 import yaml
+import argparse
 from model import Generator, Discriminator
 import numpy as np
 from utils import calculate_relative_thickness
 
-def generate_and_evaluate(user_label_list=None):
+def generate_and_evaluate(user_label_list=None, model_path=None):
     if user_label_list is None:
         # 默认的用户自定义标签: [Alpha, Re, Cl, Thickness]
         user_label_list = [2.0, 200000.0, 0.6, 0.12]
@@ -32,10 +33,29 @@ def generate_and_evaluate(user_label_list=None):
     discriminator = Discriminator(config).to(device)
     
     # 加载权重
-    gen_weights = 'model/generator.pth'
-    disc_weights = 'model/discriminator.pth'
-    generator.load_state_dict(torch.load(gen_weights, map_location=device, weights_only=True))
-    discriminator.load_state_dict(torch.load(disc_weights, map_location=device, weights_only=True))
+    if model_path is None:
+        model_path = 'model/pre_train.pt'
+        
+    if os.path.exists(model_path):
+        print(f"Loading weights from {model_path}")
+        checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+        if isinstance(checkpoint, dict) and 'generator_state_dict' in checkpoint:
+            generator.load_state_dict(checkpoint['generator_state_dict'])
+            discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+        else:
+            # Assume it's a generator state dict if not a combined checkpoint
+            generator.load_state_dict(checkpoint)
+            print("Warning: Only generator weights found or loaded.")
+    else:
+        # Fallback to separate files if gan_final.pt doesn't exist and no model_path provided
+        gen_weights = 'model/generator.pth'
+        disc_weights = 'model/discriminator.pth'
+        if os.path.exists(gen_weights) and os.path.exists(disc_weights):
+            print(f"Loading separate weights: {gen_weights}, {disc_weights}")
+            generator.load_state_dict(torch.load(gen_weights, map_location=device, weights_only=True))
+            discriminator.load_state_dict(torch.load(disc_weights, map_location=device, weights_only=True))
+        else:
+            raise FileNotFoundError(f"Could not find model weights at {model_path} or separate .pth files.")
     
     generator.eval()
     discriminator.eval()
@@ -94,6 +114,10 @@ def generate_and_evaluate(user_label_list=None):
         print(f"Saved generated airfoil {i+1}/5 to {filepath} (Thickness: {thickness:.4f}, Score: {score:.4f})")
 
 if __name__ == '__main__':
-    # 用户可以在此修改标签: [alpha, Re, Cl, Thickness]
-    custom_label = [5.0, 400000.0, 0.8, 0.15]
-    generate_and_evaluate(custom_label)
+    parser = argparse.ArgumentParser(description="Generate and evaluate airfoils using trained CGAN-GP")
+    parser.add_argument("--model", "-m", type=str, help="Path to combined model checkpoint (.pt)")
+    parser.add_argument("--labels", "-l", type=float, nargs=4, help="Labels: Alpha Re Cl Thickness")
+    args = parser.parse_args()
+    
+    custom_label = args.labels if args.labels else [5.0, 400000.0, 0.8, 0.15]
+    generate_and_evaluate(custom_label, model_path=args.model)

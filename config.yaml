@@ -10,13 +10,13 @@ gen_hid_fun: LeakyRELU
 alpha_range_step: [0,8,1]
 Re_range_step: [1e5, 6e5, 1e5]
 disc_conv_kernel: 15
-disc_conv_channels: 16
+disc_conv_channels: 8
 disc_conv2_kernel: 11
 disc_conv2_channels: 8
 disc_conv2_stride: 3
 cond_dim: 4
 lr: 0.0002
-epochs: 200
+epochs: 250
 pre_train_epoch: 200
 n_critic: 3
 lambda_gp: 10

@@ -88,7 +88,7 @@ def run_xfoil(airfoil_name, reynolds, alpha_start, alpha_end, alpha_step):
         
     return stdout
 
-def run_xfoil_single(coords, reynolds, alpha, timeout=5):
+def run_xfoil_single(coords, reynolds, alpha, timeout=3):
     """
     Evaluates a single airfoil using Xfoil.
     Returns the Cl value if successful, or None if it fails to converge.

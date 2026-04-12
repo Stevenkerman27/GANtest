@@ -2,22 +2,38 @@ import torch
 import yaml
 import matplotlib.pyplot as plt
 import os
+import argparse
 from model import Discriminator
 
-def visualize_discriminator_conv_weights():
+def visualize_discriminator_conv_weights(model_path=None):
     # 1. Load config
     with open('config.yaml', 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     
     # 2. Load state dict first to determine architecture if possible
     device = torch.device('cpu')
-    model_path = 'model/discriminator.pth'
-    if not os.path.exists(model_path):
-        print(f"Error: {model_path} not found.")
-        return
+    if model_path is None:
+        model_path = 'model/pre_train.pt'
     
-    # Load state dict
-    state_dict = torch.load(model_path, map_location=device)
+    if not os.path.exists(model_path):
+        # Fallback for older separate files
+        old_path = 'model/discriminator.pth'
+        if model_path == 'model/gan_final.pt' and os.path.exists(old_path):
+            print(f"Warning: {model_path} not found, falling back to {old_path}")
+            model_path = old_path
+        else:
+            print(f"Error: {model_path} not found.")
+            return
+    
+    # Load checkpoint
+    print(f"Loading weights from {model_path}")
+    checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+    
+    # Extract state dict
+    if isinstance(checkpoint, dict) and 'discriminator_state_dict' in checkpoint:
+        state_dict = checkpoint['discriminator_state_dict']
+    else:
+        state_dict = checkpoint
     
     # Update config from state_dict to match architecture
     if 'fc_blocks.0.weight' in state_dict:
@@ -99,4 +115,7 @@ def visualize_discriminator_conv_weights():
     print("Saved Layer 2 plot to model/discriminator_conv2_weights.png")
 
 if __name__ == '__main__':
-    visualize_discriminator_conv_weights()
+    parser = argparse.ArgumentParser(description="Visualize Discriminator convolutional weights")
+    parser.add_argument("--model", "-m", type=str, help="Path to combined model checkpoint (.pt) or discriminator weights")
+    args = parser.parse_args()
+    visualize_discriminator_conv_weights(model_path=args.model)
