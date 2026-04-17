@@ -128,9 +128,9 @@ class Discriminator(nn.Module):
         self.conv_channels = config.get('disc_conv_channels')
         self.kernel_size = config.get('disc_conv_kernel')
         
-        self.conv2_kernel = config.get('disc_conv2_kernel', 11)
-        self.conv2_channels = config.get('disc_conv2_channels', 16)
-        self.conv2_stride = config.get('disc_conv2_stride', 3)
+        self.conv2_kernel = config.get('disc_conv2_kernel')
+        self.conv2_channels = config.get('disc_conv2_channels')
+        self.conv2_stride = config.get('disc_conv2_stride')
         
         # Stage 1: Convolutional Feature Extraction
         self.conv1 = nn.Conv1d(in_channels=2, 

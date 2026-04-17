@@ -30,13 +30,20 @@ def _execute_xfoil(commands, cwd, timeout):
     Helper function to execute xfoil commands via subprocess and handle timeouts.
     Returns: (stdout, stderr, is_timeout)
     """
+    startupinfo = None
+    if os.name == 'nt':
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0  # SW_HIDE
+        
     process = subprocess.Popen(
         ['xfoil'], 
         stdin=subprocess.PIPE, 
         stdout=subprocess.PIPE, 
         stderr=subprocess.PIPE, 
         text=True,
-        cwd=cwd
+        cwd=cwd,
+        startupinfo=startupinfo
     )
     
     try:

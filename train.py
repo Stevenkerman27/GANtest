@@ -4,6 +4,8 @@ import torch
 from torch.utils.data import DataLoader
 import torch.autograd as autograd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for thread safety
 import matplotlib.pyplot as plt
 import argparse
 from model import Generator, Discriminator
@@ -42,10 +44,52 @@ def compute_gradient_penalty(D, real_samples, fake_samples, conds, device):
     gradient_penalty = ((grad_norm - 1) ** 2).mean()
     return gradient_penalty, grad_norm.mean().item()
 
+import concurrent.futures
+
+def _evaluate_single(args):
+    """Worker function to evaluate a single airfoil."""
+    i, coords, alpha, reynolds, target_cl, target_t, eps = args
+
+    # Quick geometric bounds check
+    x = coords[:, 0]
+    y = coords[:, 1]
+    
+    # 1. x bounds (must be roughly in [0, 1], with some tolerance for Bezier curve overshoots)
+    if np.any(x < -0.1) or np.any(x > 1.2):
+        return i, False
+        
+    # 2. y bounds (airfoils thicker than ~40% (y = +/-0.2) are extremely rare and likely unrealistic)
+    if np.any(np.abs(y) > 0.2):
+        return i, False
+
+    # Check for self-intersection and shape constraints
+    if check_intersection(coords) or check_shape_intersections(coords):
+        return i, False
+    
+    # Calculate thickness
+    calc_t = calculate_relative_thickness(coords)
+    t_res = abs(calc_t - target_t) / (abs(target_t) + 1e-8)
+    
+    if t_res > eps:
+        return i, False
+        
+    # Calculate Cl via Xfoil
+    calc_cl = run_xfoil_single(coords, reynolds, alpha)
+    if calc_cl is None:
+        return i, False
+        
+    cl_res = abs(calc_cl - target_cl) / (abs(target_cl) + 1e-8)
+    
+    if cl_res <= eps:
+        return i, True
+    else:
+        return i, False
+
 def evaluate_physics(fake_foils, conds, norm_stats, eps):
     """
     Evaluates generated foils using physics models.
     Splits indices into R_eps (reasonable) and F_eps (unreasonable).
+    Uses ThreadPoolExecutor to evaluate multiple foils concurrently.
     """
     batch_size = fake_foils.size(0)
     num_pts = fake_foils.size(1) // 2
@@ -57,54 +101,27 @@ def evaluate_physics(fake_foils, conds, norm_stats, eps):
     y_std = norm_stats['std'].to(conds.device)
     real_conds = conds * y_std + y_mean
     
+    # Prepare arguments for the worker pool
+    eval_args = []
     for i in range(batch_size):
         coords_flat = fake_foils[i].detach().cpu().numpy()
         coords = coords_flat.reshape(num_pts, 2)
-        
         alpha = real_conds[i, 0].item()
         reynolds = real_conds[i, 1].item()
         target_cl = real_conds[i, 2].item()
         target_t = real_conds[i, 3].item()
+        
+        eval_args.append((i, coords, alpha, reynolds, target_cl, target_t, eps))
 
-        # Quick geometric bounds check
-        x = coords[:, 0]
-        y = coords[:, 1]
+    # Run evaluations concurrently
+    with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as executor:
+        results = list(executor.map(_evaluate_single, eval_args))
         
-        # 1. x bounds (must be roughly in [0, 1], with some tolerance for Bezier curve overshoots)
-        if np.any(x < -0.1) or np.any(x > 1.2):
-            f_idx.append(i)
-            continue
-            
-        # 2. y bounds (airfoils thicker than ~40% (y = +/-0.2) are extremely rare and likely unrealistic)
-        if np.any(np.abs(y) > 0.2):
-            f_idx.append(i)
-            continue
-
-        # Check for self-intersection and shape constraints
-        if check_intersection(coords) or check_shape_intersections(coords):
-            f_idx.append(i)
-            continue
-        
-        # Calculate thickness
-        calc_t = calculate_relative_thickness(coords)
-        t_res = abs(calc_t - target_t) / (abs(target_t) + 1e-8)
-        
-        if t_res > eps:
-            f_idx.append(i)
-            continue
-            
-        # Calculate Cl via Xfoil
-        calc_cl = run_xfoil_single(coords, reynolds, alpha)
-        if calc_cl is None:
-            f_idx.append(i)
-            continue
-            
-        cl_res = abs(calc_cl - target_cl) / (abs(target_cl) + 1e-8)
-        
-        if cl_res <= eps:
-            r_idx.append(i)
+    for idx, is_reasonable in results:
+        if is_reasonable:
+            r_idx.append(idx)
         else:
-            f_idx.append(i)
+            f_idx.append(idx)
             
     return r_idx, f_idx
 
@@ -269,7 +286,6 @@ def run_lr_range_test(config, dataloader, device):
     plt.savefig('model/lr_range_test.png')
     plt.close()
     
-    # 交互输入逻辑保留你的原样即可
     while True:
         try:
             user_lr = input("Please examine 'model/lr_range_test.png' and enter the selected learning rate: ")
@@ -325,8 +341,8 @@ def train(resume_path=None):
         print(f"Skipping pre-training, starting from epoch {start_epoch}")
 
     # Optimizers for formal training
-    optimizer_G = torch.optim.Adam(generator.parameters(), lr=selected_lr, betas=(0.0, 0.9))
-    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=selected_lr, betas=(0.0, 0.9))
+    optimizer_G = torch.optim.Adam(generator.parameters(), lr=selected_lr, betas=(0.0, 0.9), weight_decay=1e-5)
+    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=selected_lr, betas=(0.0, 0.9), weight_decay=1e-5)
     eps_start = config.get('eps_start')
     eps_end = config.get('eps_end')
 
@@ -338,7 +354,9 @@ def train(resume_path=None):
     grad_norms = []
     validity_history = []
 
+    import time
     for epoch in range(start_epoch, epochs):
+        start_time = time.time()
         epoch_d_loss = 0.0
         epoch_g_loss = 0.0
         epoch_real_score = 0.0
@@ -464,6 +482,7 @@ def train(resume_path=None):
         avg_grad_norm = epoch_grad_norm / batch_count
         avg_validity = total_valid / total_samples
         
+        epoch_duration = time.time() - start_time
         d_losses.append(avg_d_loss)
         g_losses.append(avg_g_loss)
         real_scores.append(avg_real_score)
@@ -471,8 +490,13 @@ def train(resume_path=None):
         grad_norms.append(avg_grad_norm)
         validity_history.append(avg_validity)
 
-        if epoch % 5 == 0:
-            print(f"[Epoch {epoch}/{epochs}] [D loss: {avg_d_loss:.4f}] [G loss: {avg_g_loss:.4f}] [Validity: {avg_validity:.2%}]")
+        if epoch % 2 == 0:
+            speed_msg = f"[Epoch {epoch}/{epochs}] [Time: {epoch_duration:.2f}s] [D loss: {avg_d_loss:.4f}] [G loss: {avg_g_loss:.4f}]"
+            if epoch >= pre_train_epoch:
+                speed_msg += f" [Validity: {avg_validity:.2%}]"
+            print(speed_msg)
+
+        if epoch % 5 == 0 and epoch > 0:
             print(f"[Critic Real: {avg_real_score:.4f}] [Critic Fake: {avg_fake_score:.4f}] [GP Norm: {avg_grad_norm:.4f}]")
 
         # Check if pre-training is finished and save checkpoint

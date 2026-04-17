@@ -6,11 +6,12 @@ from model import Generator, Discriminator
 import numpy as np
 from utils import calculate_relative_thickness
 
-def generate_and_evaluate(user_label_list=None, model_path=None):
+def generate_and_evaluate(model_path, tag, user_label_list=None):
     if user_label_list is None:
         # 默认的用户自定义标签: [Alpha, Re, Cl, Thickness]
         user_label_list = [2.0, 200000.0, 0.6, 0.12]
         
+    print(f"\n--- Generating for {tag} using {model_path} ---")
     print(f"User defined label: {user_label_list}")
     
     # 读取配置
@@ -33,29 +34,19 @@ def generate_and_evaluate(user_label_list=None, model_path=None):
     discriminator = Discriminator(config).to(device)
     
     # 加载权重
-    if model_path is None:
-        model_path = 'model/pre_train.pt'
-        
-    if os.path.exists(model_path):
-        print(f"Loading weights from {model_path}")
-        checkpoint = torch.load(model_path, map_location=device, weights_only=True)
-        if isinstance(checkpoint, dict) and 'generator_state_dict' in checkpoint:
-            generator.load_state_dict(checkpoint['generator_state_dict'])
-            discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
-        else:
-            # Assume it's a generator state dict if not a combined checkpoint
-            generator.load_state_dict(checkpoint)
-            print("Warning: Only generator weights found or loaded.")
+    if not os.path.exists(model_path):
+        print(f"Warning: Model path {model_path} does not exist. Skipping.")
+        return
+
+    print(f"Loading weights from {model_path}")
+    checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+    if isinstance(checkpoint, dict) and 'generator_state_dict' in checkpoint:
+        generator.load_state_dict(checkpoint['generator_state_dict'])
+        discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
     else:
-        # Fallback to separate files if gan_final.pt doesn't exist and no model_path provided
-        gen_weights = 'model/generator.pth'
-        disc_weights = 'model/discriminator.pth'
-        if os.path.exists(gen_weights) and os.path.exists(disc_weights):
-            print(f"Loading separate weights: {gen_weights}, {disc_weights}")
-            generator.load_state_dict(torch.load(gen_weights, map_location=device, weights_only=True))
-            discriminator.load_state_dict(torch.load(disc_weights, map_location=device, weights_only=True))
-        else:
-            raise FileNotFoundError(f"Could not find model weights at {model_path} or separate .pth files.")
+        # Assume it's a generator state dict if not a combined checkpoint
+        generator.load_state_dict(checkpoint)
+        print("Warning: Only generator weights found or loaded.")
     
     generator.eval()
     discriminator.eval()
@@ -82,7 +73,7 @@ def generate_and_evaluate(user_label_list=None, model_path=None):
     save_dir = 'foildata/gen'
     os.makedirs(save_dir, exist_ok=True)
     
-    print("Generating airfoils...")
+    print(f"Generating airfoils for {tag}...")
     # 生成翼型和打分
     with torch.no_grad():
         generated_airfoils = generator(noise, cond) # (5, M*2)
@@ -100,24 +91,25 @@ def generate_and_evaluate(user_label_list=None, model_path=None):
         # 计算生成翼型的实际厚度
         thickness = calculate_relative_thickness(airfoil_coords)
         
-        # 按照判别器打分和厚度命名文件
-        filename = f"T{thickness:.4f}_S{score:.4f}.dat"
+        # 按照判别器打分和厚度命名文件，并添加 PRE/PG 标识
+        filename = f"{tag}_T{thickness:.4f}_S{score:.4f}.dat"
         filepath = os.path.join(save_dir, filename)
         
-        # 将生成的坐标保存为 .dat 文件 (标准XFoil格式：两列，以空格/制表符分隔)
-        # 第一行通常写翼型名字
+        # 将生成的坐标保存为 .dat 文件
         with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(f"CGAN_Generated_Thickness_{thickness:.4f}_Score_{score:.4f}\n")
+            f.write(f"{tag}_Generated_Thickness_{thickness:.4f}_Score_{score:.4f}\n")
             for pt in airfoil_coords:
                 f.write(f"{pt[0]:.6f} {pt[1]:.6f}\n")
         
-        print(f"Saved generated airfoil {i+1}/5 to {filepath} (Thickness: {thickness:.4f}, Score: {score:.4f})")
+        print(f"Saved {tag} airfoil {i+1}/5 to {filepath} (Thickness: {thickness:.4f}, Score: {score:.4f})")
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Generate and evaluate airfoils using trained CGAN-GP")
-    parser.add_argument("--model", "-m", type=str, help="Path to combined model checkpoint (.pt)")
+    parser = argparse.ArgumentParser(description="Generate airfoils using Pre-train and PG models")
     parser.add_argument("--labels", "-l", type=float, nargs=4, help="Labels: Alpha Re Cl Thickness")
     args = parser.parse_args()
     
     custom_label = args.labels if args.labels else [5.0, 400000.0, 0.8, 0.15]
-    generate_and_evaluate(custom_label, model_path=args.model)
+    
+    # 分别为预训练模型和最终模型生成结果
+    generate_and_evaluate('model/pre_train.pt', 'PRE', user_label_list=custom_label)
+    generate_and_evaluate('model/gan_final.pt', 'PG', user_label_list=custom_label)
