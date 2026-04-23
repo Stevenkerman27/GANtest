@@ -12,6 +12,13 @@ Chinese character involved in this project, mind encoding!
 2. 单一来源(Single Source of Truth)
 常量、魔术字符串, 数据库 Schema 必须定义在集中配置文件中
 
+Draw.io画图规范:
+绘制神经网络时，输入放在左侧，输出放在右侧，横向排列。神经网络用圆角矩形表示，矩形内部用箭头连接的横向排列的圆角矩形代表每一层的配置，如激活函数，神经元数量，层类型，属性等。不写concat和reshape等格式操作。
+
+输入和输出均使用圆角矩形，格式例如"noise, 10D", "Condition, [alpha, Re, thickness, Cl]"，注明维度和属性。连线均使用折线
+
+控制图片长宽比适合在屏幕上阅读。绘制后导出为png,draw.io.exe位置在D:\Software\draw.io-29.6.1-windows, 导出时选择高清晰度. 生成后读取图片文件确认效果,不要删除drawio文件
+
 
 mistakes:
 1. 当在CLI执行 Python 代码块时，必须遵循以下原则：不要在 f-string 中使用引号嵌套；禁止在 {} 内出现反斜杠；严格引号分层。禁止在 f-string 的大括号内使用任何引号或反斜杠。如果需要打印字典内容，使用 print('text', dict['key']) 这种多参数形式，不要在字符串内部嵌套转义引号

@@ -1,0 +1,70 @@
+<mxGraphModel adaptiveColors="auto">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    
+    <mxCell id="in_noise" value="noise, 10D" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+      <mxGeometry x="20" y="90" width="100" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="in_cond" value="Condition, 4D&#xa;[alpha, Re, thick, Cl]" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+      <mxGeometry x="20" y="150" width="120" height="60" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="gen_box" value="Generator" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1" vertex="1" parent="1">
+      <mxGeometry x="180" y="70" width="600" height="110" as="geometry"/>
+    </mxCell>
+    
+    <mxCell id="gen_fc1" value="Linear(14, 128)&#xa;LeakyReLU(0.2)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="gen_box">
+      <mxGeometry x="20" y="40" width="120" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="gen_fc2" value="Linear(128, 128)&#xa;LeakyReLU(0.2)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="gen_box">
+      <mxGeometry x="160" y="40" width="120" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="gen_out" value="Linear(128, 90)&#xa;[30 CP]" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="gen_box">
+      <mxGeometry x="300" y="40" width="120" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="gen_bezier" value="Bezier Layer&#xa;100 Points" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="gen_box">
+      <mxGeometry x="440" y="40" width="120" height="50" as="geometry"/>
+    </mxCell>
+    
+    <mxCell id="edge_gen1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="gen_box" source="gen_fc1" target="gen_fc2"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="edge_gen2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="gen_box" source="gen_fc2" target="gen_out"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="edge_gen3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="gen_box" source="gen_out" target="gen_bezier"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+    <mxCell id="out_airfoil" value="Airfoil, 200D&#xa;[100x2 coords]" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+      <mxGeometry x="820" y="105" width="100" height="40" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="dis_box" value="Discriminator" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1" vertex="1" parent="1">
+      <mxGeometry x="960" y="70" width="600" height="110" as="geometry"/>
+    </mxCell>
+    
+    <mxCell id="dis_conv1" value="Conv1d(2, 4, k=15)&#xa;LeakyReLU(0.2)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="dis_box">
+      <mxGeometry x="20" y="40" width="130" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="dis_conv2" value="Conv1d(4, 4, k=11, s=3)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="dis_box">
+      <mxGeometry x="170" y="40" width="130" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="dis_fc1" value="Linear(140, 256)&#xa;LeakyReLU(0.2)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="dis_box">
+      <mxGeometry x="320" y="40" width="120" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="dis_out" value="Linear(256, 1)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="dis_box">
+      <mxGeometry x="460" y="40" width="120" height="50" as="geometry"/>
+    </mxCell>
+    
+    <mxCell id="edge_dis1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="dis_box" source="dis_conv1" target="dis_conv2"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="edge_dis2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="dis_box" source="dis_conv2" target="dis_fc1"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="edge_dis3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="dis_box" source="dis_fc1" target="dis_out"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+    <mxCell id="out_score" value="Validity (Score)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+      <mxGeometry x="1600" y="105" width="100" height="40" as="geometry"/>
+    </mxCell>
+
+    <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;entryX=0;entryY=0.33;" edge="1" parent="1" source="in_noise" target="gen_box"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;entryX=0;entryY=0.67;" edge="1" parent="1" source="in_cond" target="gen_box"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="gen_box" target="out_airfoil"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="out_airfoil" target="dis_box"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" edge="1" parent="1" source="in_cond" target="dis_box"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="80" y="240"/><mxPoint x="1260" y="240"/></Array></mxGeometry></mxCell>
+    <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="dis_box" target="out_score"><mxGeometry relative="1" as="geometry"/></mxCell>
+  </root>
+</mxGraphModel>

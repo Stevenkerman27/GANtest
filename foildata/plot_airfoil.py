@@ -106,9 +106,10 @@ class AirfoilPlotter:
         self.ax.plot(xs, ys, 'b-', linewidth=1.5, label=f"{name}")
         self.ax.scatter(xs, ys, s=5, c='red', alpha=0.5) # 显示点
         
-        self.ax.set_title(f"Airfoil: {name} ({filename})", fontsize=12)
-        self.ax.set_xlabel("X/c")
-        self.ax.set_ylabel("Y/c")
+        self.ax.set_title(f"Airfoil: {name}", fontsize=16)
+        self.ax.set_xlabel("X/c", fontsize=16)
+        self.ax.set_ylabel("Y/c", fontsize=16)
+        self.ax.tick_params(axis='both', labelsize=14)
         
         # 自动调整范围
         self.ax.set_xlim(-0.05, 1.05)

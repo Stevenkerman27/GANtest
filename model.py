@@ -76,11 +76,7 @@ class Generator(nn.Module):
         self.hid_node = config.get('gen_hid_node')
         self.hid_layer = config.get('gen_hid_layer')
         
-        act_fun_name = config.get('gen_hid_fun')
-        if act_fun_name in ('LeakyRELU', 'LeakyReLU'):
-            act_fun = nn.LeakyReLU(0.2)
-        else:
-            act_fun = getattr(nn, act_fun_name)()
+        act_fun = nn.LeakyReLU(0.2)
             
         layers = []
         in_dim = self.noise_dim + self.cond_dim
@@ -94,6 +90,7 @@ class Generator(nn.Module):
         self.num_cp = config.get('num_control_points')
         self.out_layer = nn.Linear(self.hid_node, self.num_cp * 3)
         self.bezier_layer = BezierDecoderLayer(config)
+        self.register_buffer('fixed_pt', torch.tensor([1.0, 0.0]))
 
     def forward(self, noise, cond):
         x = torch.cat([noise, cond], dim=1)
@@ -105,9 +102,8 @@ class Generator(nn.Module):
         control_points = x[:, :, :2].clone()
         
         # Fix the first and last control points to (1, 0)
-        fixed_pt = torch.tensor([1.0, 0.0], device=x.device, dtype=x.dtype)
-        control_points[:, 0, :] = fixed_pt
-        control_points[:, -1, :] = fixed_pt
+        control_points[:, 0, :] = self.fixed_pt
+        control_points[:, -1, :] = self.fixed_pt
         
         # Weights should be positive to avoid negative denominators / singular curves
         weights = torch.nn.functional.softplus(x[:, :, 2])
@@ -144,11 +140,7 @@ class Discriminator(nn.Module):
                                stride=self.conv2_stride,
                                padding=self.conv2_kernel // 2)
         
-        act_fun_name = config.get('gen_hid_fun')
-        if act_fun_name in ('LeakyRELU', 'LeakyReLU'):
-            act_fun = nn.LeakyReLU(0.2)
-        else:
-            act_fun = getattr(nn, act_fun_name)()
+        act_fun = nn.LeakyReLU(0.2)
             
         # Calculate sequence length after conv2
         # conv1 output length is num_pts (due to padding = kernel // 2, stride = 1)

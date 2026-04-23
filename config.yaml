@@ -7,21 +7,23 @@ gen_hid_layer: 2
 dis_hid_node: 256
 dis_hid_layer: 2
 gen_hid_fun: LeakyRELU
+dis_hid_fun: LeakyRELU
 alpha_range_step: [0,8,1]
 Re_range_step: [1e5, 6e5, 1e5]
 disc_conv_kernel: 15
-disc_conv_channels: 8
+disc_conv_channels: 4
 disc_conv2_kernel: 11
-disc_conv2_channels: 8
+disc_conv2_channels: 4
 disc_conv2_stride: 3
 cond_dim: 4
-lr: 0.0002
-epochs: 230
+lr: 3e-4
+lr_phase2: 1e-4
+epochs: 240
 pre_train_epoch: 200
 n_critic: 3
 lambda_gp: 10
 batch_size: 16
 device: cuda  # 设置计算设备: auto (自动选择), cuda, 或 cpu
-eps_start: 0.2
+eps_start: 0.1
 eps_end: 0.05
 plot_interval: 2

@@ -7,6 +7,9 @@ import numpy as np
 from utils import calculate_relative_thickness
 from foildata.xfoil import run_xfoil_single
 
+# 生成翼型的数量
+NUM_GENERATE = 6
+
 def generate_and_evaluate(model_path, tag, user_label_list):        
     print(f"\n--- Generating for {tag} using {model_path} ---")
     print(f"User defined label: {user_label_list}")
@@ -61,13 +64,13 @@ def generate_and_evaluate(model_path, tag, user_label_list):
     
     # 归一化条件
     cond = (user_label - cond_mean) / cond_std
-    # 扩展条件为5个batch，因为要生成5组不同的噪声
-    cond = cond.expand(5, -1)
+    # 扩展条件为 batch 大小
+    cond = cond.expand(NUM_GENERATE, -1)
     
-    # 随机生成5组噪声
+    # 随机生成噪声
     noise_dim = config.get('noise_dimension', 10)
     # CGAN-GP 常见情况下，噪声可能是从标准正态分布采样
-    noise = torch.randn(5, noise_dim).to(device)
+    noise = torch.randn(NUM_GENERATE, noise_dim).to(device)
     
     # 确保保存目录存在
     save_dir = 'foildata/gen'
@@ -76,47 +79,67 @@ def generate_and_evaluate(model_path, tag, user_label_list):
     print(f"Generating airfoils for {tag}...")
     # 生成翼型和打分
     with torch.no_grad():
-        generated_airfoils = generator(noise, cond) # (5, M*2)
-        scores = discriminator(generated_airfoils, cond) # (5, 1)
+        generated_airfoils = generator(noise, cond) # (NUM_GENERATE, M*2)
+        scores = discriminator(generated_airfoils, cond) # (NUM_GENERATE, 1)
         
     num_output_points = config.get('num_output_points', 60)
     
-    generated_airfoils = generated_airfoils.view(5, num_output_points, 2).cpu().numpy()
+    generated_airfoils = generated_airfoils.view(NUM_GENERATE, num_output_points, 2).cpu().numpy()
     scores = scores.view(-1).cpu().numpy()
     
-    print(f"{'No.':<4} | {'Score':<8} | {'Thick':<7} | {'CL':<8} | {'CD':<8} | {'CM':<8} | {'Status'}")
-    print("-" * 70)
+    target_cl = user_label_list[2]
+    target_thick = user_label_list[3]
     
-    for i in range(5):
+    thick_errs = []
+    cl_errs = []
+    
+    print(f"{'No.':<4} | {'Score':<8} | {'Thick':<7} | {'T_Err%':<8} | {'CL':<8} | {'CL_Err%':<8} | {'CD':<8} | {'CM':<8} | {'Status'}")
+    print("-" * 95)
+    
+    for i in range(NUM_GENERATE):
         score = scores[i]
         airfoil_coords = generated_airfoils[i]
         
         # 计算生成翼型的实际厚度
         thickness = calculate_relative_thickness(airfoil_coords)
         
-        # 按照判别器打分和厚度命名文件，并添加 PRE/PG 标识
-        filename = f"{tag}_T{thickness:.4f}_S{score:.4f}.dat"
-        filepath = os.path.join(save_dir, filename)
-        
-        # 将生成的坐标保存为 .dat 文件
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(f"{tag}_Generated_Thickness_{thickness:.4f}_Score_{score:.4f}\n")
-            for pt in airfoil_coords:
-                f.write(f"{pt[0]:.6f} {pt[1]:.6f}\n")
-        
         # 调用 XFOIL 进行气动分析
         xfoil_res = run_xfoil_single(airfoil_coords, re_input, alpha_input, return_all=True)
         
+        # 计算百分比误差
+        thick_err = (thickness - target_thick) / target_thick * 100
+        thick_errs.append(abs(thick_err))
+        
         if xfoil_res:
             cl = xfoil_res.get('CL', np.nan)
+            cl_err = (cl - target_cl) / target_cl * 100
+            cl_errs.append(abs(cl_err))
             cd = xfoil_res.get('CD', np.nan)
             cm = xfoil_res.get('CM', np.nan)
             status = "Success"
         else:
             cl = cd = cm = np.nan
+            cl_err = np.nan
             status = "Failed"
             
-        print(f"{i+1:<4} | {score:8.4f} | {thickness:7.4f} | {cl:8.4f} | {cd:8.5f} | {cm:8.4f} | {status}")
+        # 按照要求格式命名文件：type_Score_Thickness_Cl_Cd_Cm
+        filename = f"{tag}_S{score:.4f}_T{thickness:.4f}_Cl{cl:.4f}_Cd{cd:.5f}_Cm{cm:.4f}.dat"
+        filepath = os.path.join(save_dir, filename)
+        
+        # 将生成的坐标保存为 .dat 文件
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(f"{tag}_Score_{score:.4f}_Thickness_{thickness:.4f}_Cl_{cl:.4f}_Cd_{cd:.5f}_Cm_{cm:.4f}\n")
+            for pt in airfoil_coords:
+                f.write(f"{pt[0]:.6f} {pt[1]:.6f}\n")
+        
+        print(f"{i+1:<4} | {score:8.4f} | {thickness:7.4f} | {thick_err:7.2f}% | {cl:8.4f} | {cl_err:7.2f}% | {cd:8.5f} | {cm:8.4f} | {status}")
+        
+    # 计算总体误差 (MAE)
+    avg_thick_err = np.mean(thick_errs)
+    avg_cl_err = np.mean(cl_errs) if cl_errs else np.nan
+    
+    print("-" * 95)
+    print(f"Overall Batch MAE: Thickness Error: {avg_thick_err:.2f}%, CL Error: {avg_cl_err:.2f}%")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Generate airfoils using Pre-train and PG models")

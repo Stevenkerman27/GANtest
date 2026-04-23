@@ -172,11 +172,17 @@ def plot_metrics(d_losses, g_losses, real_scores, fake_scores, grad_norms, path)
 
 import math
 
-def run_lr_range_test(config, dataloader, device):
-    print("--- Starting LR Range Test ---")
+def run_lr_range_test(config, dataloader, device, generator=None, discriminator=None, phase=1):
+    print(f"--- Starting LR Range Test (Phase {phase}) ---")
     
-    generator = Generator(config).to(device)
-    discriminator = Discriminator(config).to(device)
+    if generator is None or discriminator is None:
+        generator = Generator(config).to(device)
+        discriminator = Discriminator(config).to(device)
+        restore_state = False
+    else:
+        gen_state = {k: v.cpu().clone() for k, v in generator.state_dict().items()}
+        dis_state = {k: v.cpu().clone() for k, v in discriminator.state_dict().items()}
+        restore_state = True
     
     lr_start = 1e-7
     lr_end = 1.0  # WGAN 通常测到 1.0 足够发现崩溃点
@@ -280,21 +286,26 @@ def run_lr_range_test(config, dataloader, device):
     plt.xscale('log')
     plt.xlabel('Learning Rate (Log Scale)')
     plt.ylabel('Loss')
-    plt.title('LR Range Test')
+    plt.title(f'LR Range Test (Phase {phase})')
     plt.legend()
     plt.grid(True, which="both", ls="-", alpha=0.5)
-    plt.savefig('model/lr_range_test.png')
+    plot_path = f'model/lr_range_test_phase{phase}.png'
+    plt.savefig(plot_path)
     plt.close()
     
     while True:
         try:
-            user_lr = input("Please examine 'model/lr_range_test.png' and enter the selected learning rate: ")
+            user_lr = input(f"Please examine '{plot_path}' and enter the selected learning rate: ")
             final_lr = float(user_lr.strip())
             if final_lr > 0:
                 break
         except ValueError:
             pass
             
+    if restore_state:
+        generator.load_state_dict(gen_state)
+        discriminator.load_state_dict(dis_state)
+        
     return final_lr
 
 def train(resume_path=None):
@@ -323,9 +334,6 @@ def train(resume_path=None):
     # Load norm stats
     norm_stats = torch.load("model/cond_norm.pt", map_location=device, weights_only=True)
 
-    # --- Run LR Range Test ---
-    selected_lr = run_lr_range_test(config, dataloader, device)
-    
     # Initialize formal models
     generator = Generator(config).to(device)
     discriminator = Discriminator(config).to(device)
@@ -340,9 +348,16 @@ def train(resume_path=None):
         start_epoch = pre_train_epoch
         print(f"Skipping pre-training, starting from epoch {start_epoch}")
 
+    # --- Phase 1 LR ---
+    phase1_lr = float(config.get('lr', 0.0))
+    if phase1_lr <= 0.0 and start_epoch < pre_train_epoch:
+        phase1_lr = run_lr_range_test(config, dataloader, device, phase=1)
+    elif start_epoch >= pre_train_epoch:
+        phase1_lr = 1e-4  # Dummy value, will be overridden immediately
+
     # Optimizers for formal training
-    optimizer_G = torch.optim.Adam(generator.parameters(), lr=selected_lr, betas=(0.0, 0.9), weight_decay=5e-5)
-    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=selected_lr, betas=(0.0, 0.9), weight_decay=5e-5)
+    optimizer_G = torch.optim.Adam(generator.parameters(), lr=phase1_lr, betas=(0.0, 0.9), weight_decay=5e-5)
+    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=phase1_lr, betas=(0.0, 0.9), weight_decay=5e-5)
     eps_start = config.get('eps_start')
     eps_end = config.get('eps_end')
 
@@ -356,6 +371,18 @@ def train(resume_path=None):
 
     import time
     for epoch in range(start_epoch, epochs):
+        if epoch == pre_train_epoch:
+            phase2_lr = float(config.get('lr_phase2', 0.0))
+            if phase2_lr <= 0.0:
+                print("\n--- Transitioning to Phase 2, determining learning rate ---")
+                phase2_lr = run_lr_range_test(config, dataloader, device, generator=generator, discriminator=discriminator, phase=2)
+            
+            for param_group in optimizer_G.param_groups:
+                param_group['lr'] = phase2_lr
+            for param_group in optimizer_D.param_groups:
+                param_group['lr'] = phase2_lr
+            print(f"Phase 2 learning rate set to {phase2_lr}")
+
         start_time = time.time()
         epoch_d_loss = 0.0
         epoch_g_loss = 0.0

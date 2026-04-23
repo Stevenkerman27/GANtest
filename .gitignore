@@ -4,3 +4,4 @@ foildata/polars
 foildata/coord_seligFmt
 foildata/processed_foil
 docs/
+.pytest_cache/
