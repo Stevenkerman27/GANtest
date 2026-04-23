@@ -8,7 +8,7 @@ from utils import calculate_relative_thickness
 from foildata.xfoil import run_xfoil_single
 
 # 生成翼型的数量
-NUM_GENERATE = 6
+NUM_GENERATE = 10
 
 def generate_and_evaluate(model_path, tag, user_label_list):        
     print(f"\n--- Generating for {tag} using {model_path} ---")

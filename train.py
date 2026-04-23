@@ -48,7 +48,7 @@ import concurrent.futures
 
 def _evaluate_single(args):
     """Worker function to evaluate a single airfoil."""
-    i, coords, alpha, reynolds, target_cl, target_t, eps = args
+    i, coords, alpha, reynolds, target_cl, target_t, eps_cl, eps_t = args
 
     # Quick geometric bounds check
     x = coords[:, 0]
@@ -70,7 +70,7 @@ def _evaluate_single(args):
     calc_t = calculate_relative_thickness(coords)
     t_res = abs(calc_t - target_t) / (abs(target_t) + 1e-8)
     
-    if t_res > eps:
+    if t_res > eps_t:
         return i, False
         
     # Calculate Cl via Xfoil
@@ -80,12 +80,12 @@ def _evaluate_single(args):
         
     cl_res = abs(calc_cl - target_cl) / (abs(target_cl) + 1e-8)
     
-    if cl_res <= eps:
+    if cl_res <= eps_cl:
         return i, True
     else:
         return i, False
 
-def evaluate_physics(fake_foils, conds, norm_stats, eps):
+def evaluate_physics(fake_foils, conds, norm_stats, eps_cl, eps_t):
     """
     Evaluates generated foils using physics models.
     Splits indices into R_eps (reasonable) and F_eps (unreasonable).
@@ -111,7 +111,7 @@ def evaluate_physics(fake_foils, conds, norm_stats, eps):
         target_cl = real_conds[i, 2].item()
         target_t = real_conds[i, 3].item()
         
-        eval_args.append((i, coords, alpha, reynolds, target_cl, target_t, eps))
+        eval_args.append((i, coords, alpha, reynolds, target_cl, target_t, eps_cl, eps_t))
 
     # Run evaluations concurrently
     with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as executor:
@@ -358,8 +358,11 @@ def train(resume_path=None):
     # Optimizers for formal training
     optimizer_G = torch.optim.Adam(generator.parameters(), lr=phase1_lr, betas=(0.0, 0.9), weight_decay=5e-5)
     optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=phase1_lr, betas=(0.0, 0.9), weight_decay=5e-5)
-    eps_start = config.get('eps_start')
-    eps_end = config.get('eps_end')
+    
+    eps_cl_start = config.get('eps_cl_start', 0.1)
+    eps_cl_end = config.get('eps_cl_end', 0.05)
+    eps_t_start = config.get('eps_t_start', 0.05)
+    eps_t_end = config.get('eps_t_end', 0.02)
 
     # Lists to keep track of progress
     d_losses = []
@@ -395,14 +398,17 @@ def train(resume_path=None):
         total_samples = 0
         total_valid = 0
         
-        # Calculate current epsilon for physics evaluation (moved outside batch loop)
-        current_eps = eps_start
+        # Calculate current epsilons for physics evaluation
+        curr_eps_cl = eps_cl_start
+        curr_eps_t = eps_t_start
         if epoch >= pre_train_epoch:
             if epochs > pre_train_epoch + 1:
                 progress = (epoch - pre_train_epoch) / (epochs - pre_train_epoch - 1)
-                current_eps = eps_start - (eps_start - eps_end) * progress
+                curr_eps_cl = eps_cl_start - (eps_cl_start - eps_cl_end) * progress
+                curr_eps_t = eps_t_start - (eps_t_start - eps_t_end) * progress
             else:
-                current_eps = eps_end
+                curr_eps_cl = eps_cl_end
+                curr_eps_t = eps_t_end
 
         for i, (foils, conds) in enumerate(dataloader):
             foils = foils.to(device)
@@ -424,7 +430,7 @@ def train(resume_path=None):
                 r_idx = []
                 f_idx = list(range(batch_size))
             else:
-                r_idx, f_idx = evaluate_physics(fake_foils, conds, norm_stats, current_eps)
+                r_idx, f_idx = evaluate_physics(fake_foils, conds, norm_stats, curr_eps_cl, curr_eps_t)
                 total_valid += len(r_idx)
 
             # Split fake_foils
@@ -451,13 +457,24 @@ def train(resume_path=None):
             fake_validity = discriminator(f_foils, f_conds)
             
             # Gradient penalty
-            gradient_penalty, grad_norm = compute_gradient_penalty(
-                discriminator, 
-                combined_real_foils, 
-                f_foils[:combined_real_foils.size(0)],
-                combined_real_conds[:combined_real_foils.size(0)], 
-                device
-            )
+            if epoch < pre_train_epoch:
+                # Phase 1: Standard GP on full batch
+                gradient_penalty, grad_norm = compute_gradient_penalty(
+                    discriminator, 
+                    foils, 
+                    fake_foils.detach(),
+                    conds, 
+                    device
+                )
+            else:
+                # Phase 2: Targeted GP on matching real-fake pairs
+                gradient_penalty, grad_norm = compute_gradient_penalty(
+                    discriminator, 
+                    foils[f_idx], 
+                    f_foils,
+                    conds[f_idx], 
+                    device
+                )
 
             # Adversarial loss
             d_loss = -torch.mean(real_validity) + torch.mean(fake_validity) + lambda_gp * gradient_penalty
@@ -484,7 +501,7 @@ def train(resume_path=None):
                 if epoch < pre_train_epoch:
                     f_idx_gen = list(range(batch_size))
                 else:
-                    _, f_idx_gen = evaluate_physics(fake_foil, conds, norm_stats, current_eps)
+                    _, f_idx_gen = evaluate_physics(fake_foil, conds, norm_stats, curr_eps_cl, curr_eps_t)
                 
                 if len(f_idx_gen) > 0:
                     f_foil_gen = fake_foil[f_idx_gen]
