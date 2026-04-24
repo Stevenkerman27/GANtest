@@ -2,27 +2,175 @@ import os
 import torch
 import yaml
 import argparse
-from model import Generator, Discriminator
 import numpy as np
+import matplotlib.pyplot as plt
+import concurrent.futures
+from scipy.stats import qmc
+from model import Generator
 from utils import calculate_relative_thickness
 from foildata.xfoil import run_xfoil_single
 
-# 生成翼型的数量
-NUM_GENERATE = 10
+# 默认配置
+DEFAULT_N_COND = 50
+DEFAULT_K_SAMPLES = 8
+DEFAULT_TOP_M = 5
 
-def generate_and_evaluate(model_path, tag, user_label_list):        
-    print(f"\n--- Generating for {tag} using {model_path} ---")
-    print(f"User defined label: {user_label_list}")
+# Parameter Bounds: [Alpha, Re, Cl, Thickness]
+BOUNDS = np.array([
+    [0.0, 8.0],
+    [100000.0, 600000.0],
+    [-0.5, 1.75],
+    [0.024, 0.198]
+])
+
+def plot_heatmap(x, y, z, title, filename, cmap='jet'):
+    plt.figure(figsize=(9, 7))
+    # 使用 tricontourf 生成平滑的等高线图
+    # levels 增加平滑度
+    levels = 20
+    try:
+        cntr = plt.tricontourf(x, y, z, levels=levels, cmap=cmap)
+        plt.colorbar(cntr, label='Inaccuracy (Mean Error % + Variance)')
+    except Exception as e:
+        print(f"Warning: Could not create contour plot for {title}: {e}. Falling back to scatter.")
+        sc = plt.scatter(x, y, c=z, cmap=cmap, edgecolors='k', alpha=0.8)
+        plt.colorbar(sc, label='Inaccuracy (Mean Error % + Variance)')
     
-    alpha_input = user_label_list[0]
-    re_input = user_label_list[1]
+    # 叠加散点显示原始采样点位置
+    plt.scatter(x, y, c='k', s=10, alpha=0.4)
     
-    # 读取配置
-    config_path = "config.yaml"
-    with open(config_path, 'r', encoding='utf-8') as f:
+    plt.xlabel('Alpha (deg)')
+    plt.ylabel('Reynolds Number')
+    plt.title(title)
+    plt.grid(True, linestyle='--', alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(filename, dpi=300)
+    plt.close()
+
+def _worker_eval_xfoil(args):
+    """Worker function for parallel XFoil evaluation"""
+    coords, re_input, alpha_input, target_cl, target_thick = args
+    
+    thickness = calculate_relative_thickness(coords)
+    thick_err = abs(thickness - target_thick) / (target_thick + 1e-4) * 100
+    
+    xfoil_res = run_xfoil_single(coords, re_input, alpha_input, return_all=True)
+    
+    cl = xfoil_res.get('CL', np.nan) if xfoil_res else np.nan
+    cd = xfoil_res.get('CD', np.nan) if xfoil_res else np.nan
+    cm = xfoil_res.get('CM', np.nan) if xfoil_res else np.nan
+
+    # 只有当 CL, CD, CM 全部有效时才计算误差，否则给予惩罚值
+    if not np.isnan(cl) and not np.isnan(cd) and not np.isnan(cm):
+        cl_err = abs(cl - target_cl) / (abs(target_cl) + 1e-4) * 100
+    else:
+        cl_err = 10.0 # Penalty for failure or partial convergence
+        
+    total_err = 0.5 * thick_err + 0.5 * cl_err
+    
+    return {
+        'coords': coords, 'total_err': total_err, 'thick_err': thick_err, 'cl_err': cl_err,
+        'thickness': thickness, 'cl': cl, 'cd': cd, 'cm': cm,
+        'alpha': alpha_input, 're': re_input, 'target_thick': target_thick, 'target_cl': target_cl
+    }
+
+def evaluate_model(model_path, tag, config, device, cond_mean, cond_std, n_cond, k_samples, top_m):
+    print(f"\n--- Evaluating {tag} model: {model_path} ---")
+    if not os.path.exists(model_path):
+        print(f"Model {model_path} not found. Skipping.")
+        return
+
+    generator = Generator(config).to(device)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+    if isinstance(checkpoint, dict) and 'generator_state_dict' in checkpoint:
+        generator.load_state_dict(checkpoint['generator_state_dict'])
+    else:
+        generator.load_state_dict(checkpoint)
+    generator.eval()
+
+    # Generate LHS samples
+    sampler = qmc.LatinHypercube(d=4)
+    sample = sampler.random(n=n_cond)
+    cond_samples = qmc.scale(sample, BOUNDS[:, 0], BOUNDS[:, 1])
+
+    noise_dim = config.get('noise_dimension', 6)
+    num_output_points = config.get('num_output_points', 100)
+
+    all_eval_tasks = []
+    
+    print(f"Generating {n_cond * k_samples} airfoils for evaluation...")
+    for i, cond_val in enumerate(cond_samples):
+        alpha_input, re_input, target_cl, target_thick = cond_val
+        
+        cond_tensor = torch.tensor(cond_val, dtype=torch.float32).unsqueeze(0).to(device)
+        norm_cond = (cond_tensor - cond_mean) / cond_std
+        norm_cond = norm_cond.expand(k_samples, -1)
+        
+        noise = torch.randn(k_samples, noise_dim).to(device)
+        
+        with torch.no_grad():
+            gen_out = generator(noise, norm_cond)
+        gen_airfoils = gen_out.view(k_samples, num_output_points, 2).cpu().numpy()
+        
+        for k in range(k_samples):
+            all_eval_tasks.append((gen_airfoils[k], re_input, alpha_input, target_cl, target_thick))
+
+    # Parallel Execution
+    max_workers = config['max_workers']
+    print(f"Running parallel XFoil evaluations (max_workers={max_workers})...")
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(_worker_eval_xfoil, all_eval_tasks))
+
+    # Process results back into heatmaps data
+    results_alpha, results_re = [], []
+    results_thick_inacc, results_cl_inacc = [], []
+    
+    for i in range(n_cond):
+        batch = results[i*k_samples : (i+1)*k_samples]
+        batch_thick_errs = [r['thick_err'] for r in batch]
+        batch_cl_errs = [r['cl_err'] for r in batch]
+        
+        thick_inacc = np.mean(batch_thick_errs) + np.var(batch_thick_errs)
+        cl_inacc = np.mean(batch_cl_errs) + np.var(batch_cl_errs)
+        
+        # Take metadata from first sample of batch
+        meta = batch[0]
+        results_alpha.append(meta['alpha'])
+        results_re.append(meta['re'])
+        results_thick_inacc.append(thick_inacc)
+        results_cl_inacc.append(cl_inacc)
+
+    # Plot heatmaps
+    os.makedirs('model', exist_ok=True)
+    plot_heatmap(results_alpha, results_re, results_thick_inacc, f'{tag} Thickness Inaccuracy', f'model/eval_{tag.lower()}_thick.png')
+    plot_heatmap(results_alpha, results_re, results_cl_inacc, f'{tag} CL Inaccuracy', f'model/eval_{tag.lower()}_cl.png')
+                 
+    # Save top M
+    os.makedirs('foildata/gen', exist_ok=True)
+    results.sort(key=lambda x: x['total_err'])
+    print(f"\nSaving Top {top_m} {tag} airfoils...")
+    
+    for i, item in enumerate(results[:top_m]):
+        filename = f"{tag}_Top{i+1}_Terr{item['thick_err']:.1f}_Clerr{item['cl_err']:.1f}_T{item['thickness']:.4f}_Cl{item['cl']:.4f}_Cd{item['cd']:.5f}.dat"
+        filepath = os.path.join('foildata/gen', filename)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            header = f"{tag}_Top{i+1}_Terr_{item['thick_err']:.1f}_Clerr_{item['cl_err']:.1f}_Thick_{item['thickness']:.4f}_Cl_{item['cl']:.4f}_Cd_{item['cd']:.5f}"
+            f.write(header + "\n")
+            for pt in item['coords']:
+                f.write(f"{pt[0]:.6f} {pt[1]:.6f}\n")
+        print(f"Saved: {filename}")
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--n_cond", type=int, default=DEFAULT_N_COND, help="Number of LHS conditions")
+    parser.add_argument("--k_samples", type=int, default=DEFAULT_K_SAMPLES, help="Airfoils per condition")
+    parser.add_argument("--top_m", type=int, default=DEFAULT_TOP_M, help="Top M airfoils to save")
+    args = parser.parse_args()
+
+    with open("config.yaml", 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
         
-    # 初始化设备
     device_cfg = config.get("device", "auto")
     if device_cfg.lower() == "cuda" and torch.cuda.is_available():
         device = torch.device("cuda")
@@ -30,124 +178,10 @@ def generate_and_evaluate(model_path, tag, user_label_list):
         device = torch.device("cpu")
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    
-    # 实例化模型
-    generator = Generator(config).to(device)
-    discriminator = Discriminator(config).to(device)
-    
-    # 加载权重
-    if not os.path.exists(model_path):
-        print(f"Warning: Model path {model_path} does not exist. Skipping.")
-        return
 
-    print(f"Loading weights from {model_path}")
-    checkpoint = torch.load(model_path, map_location=device, weights_only=True)
-    if isinstance(checkpoint, dict) and 'generator_state_dict' in checkpoint:
-        generator.load_state_dict(checkpoint['generator_state_dict'])
-        discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
-    else:
-        # Assume it's a generator state dict if not a combined checkpoint
-        generator.load_state_dict(checkpoint)
-        print("Warning: Only generator weights found or loaded.")
-    
-    generator.eval()
-    discriminator.eval()
-    
-    # 加载条件归一化参数
     norm_params = torch.load('model/cond_norm.pt', map_location=device, weights_only=True)
     cond_mean = norm_params['mean'].to(device)
     cond_std = norm_params['std'].to(device)
-    
-    # 处理用户输入的标签
-    user_label = torch.tensor(user_label_list, dtype=torch.float32).unsqueeze(0).to(device)
-    
-    # 归一化条件
-    cond = (user_label - cond_mean) / cond_std
-    # 扩展条件为 batch 大小
-    cond = cond.expand(NUM_GENERATE, -1)
-    
-    # 随机生成噪声
-    noise_dim = config.get('noise_dimension', 10)
-    # CGAN-GP 常见情况下，噪声可能是从标准正态分布采样
-    noise = torch.randn(NUM_GENERATE, noise_dim).to(device)
-    
-    # 确保保存目录存在
-    save_dir = 'foildata/gen'
-    os.makedirs(save_dir, exist_ok=True)
-    
-    print(f"Generating airfoils for {tag}...")
-    # 生成翼型和打分
-    with torch.no_grad():
-        generated_airfoils = generator(noise, cond) # (NUM_GENERATE, M*2)
-        scores = discriminator(generated_airfoils, cond) # (NUM_GENERATE, 1)
-        
-    num_output_points = config.get('num_output_points', 60)
-    
-    generated_airfoils = generated_airfoils.view(NUM_GENERATE, num_output_points, 2).cpu().numpy()
-    scores = scores.view(-1).cpu().numpy()
-    
-    target_cl = user_label_list[2]
-    target_thick = user_label_list[3]
-    
-    thick_errs = []
-    cl_errs = []
-    
-    print(f"{'No.':<4} | {'Score':<8} | {'Thick':<7} | {'T_Err%':<8} | {'CL':<8} | {'CL_Err%':<8} | {'CD':<8} | {'CM':<8} | {'Status'}")
-    print("-" * 95)
-    
-    for i in range(NUM_GENERATE):
-        score = scores[i]
-        airfoil_coords = generated_airfoils[i]
-        
-        # 计算生成翼型的实际厚度
-        thickness = calculate_relative_thickness(airfoil_coords)
-        
-        # 调用 XFOIL 进行气动分析
-        xfoil_res = run_xfoil_single(airfoil_coords, re_input, alpha_input, return_all=True)
-        
-        # 计算百分比误差
-        thick_err = (thickness - target_thick) / target_thick * 100
-        thick_errs.append(abs(thick_err))
-        
-        if xfoil_res:
-            cl = xfoil_res.get('CL', np.nan)
-            cl_err = (cl - target_cl) / target_cl * 100
-            cl_errs.append(abs(cl_err))
-            cd = xfoil_res.get('CD', np.nan)
-            cm = xfoil_res.get('CM', np.nan)
-            status = "Success"
-        else:
-            cl = cd = cm = np.nan
-            cl_err = np.nan
-            status = "Failed"
-            
-        # 按照要求格式命名文件：type_Score_Thickness_Cl_Cd_Cm
-        filename = f"{tag}_S{score:.4f}_T{thickness:.4f}_Cl{cl:.4f}_Cd{cd:.5f}_Cm{cm:.4f}.dat"
-        filepath = os.path.join(save_dir, filename)
-        
-        # 将生成的坐标保存为 .dat 文件
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(f"{tag}_Score_{score:.4f}_Thickness_{thickness:.4f}_Cl_{cl:.4f}_Cd_{cd:.5f}_Cm_{cm:.4f}\n")
-            for pt in airfoil_coords:
-                f.write(f"{pt[0]:.6f} {pt[1]:.6f}\n")
-        
-        print(f"{i+1:<4} | {score:8.4f} | {thickness:7.4f} | {thick_err:7.2f}% | {cl:8.4f} | {cl_err:7.2f}% | {cd:8.5f} | {cm:8.4f} | {status}")
-        
-    # 计算总体误差 (MAE)
-    avg_thick_err = np.mean(thick_errs)
-    avg_cl_err = np.mean(cl_errs) if cl_errs else np.nan
-    
-    print("-" * 95)
-    print(f"Overall Batch MAE: Thickness Error: {avg_thick_err:.2f}%, CL Error: {avg_cl_err:.2f}%")
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Generate airfoils using Pre-train and PG models")
-    parser.add_argument("--labels", "-l", type=float, nargs=4, help="Labels: Alpha Re Cl Thickness")
-    args = parser.parse_args()
-    
-    custom_label = args.labels if args.labels else [2.0, 200000.0, 0.6, 0.12]
-    
-    # 分别为预训练模型和最终模型生成结果
-    generate_and_evaluate('model/pre_train.pt', 'PRE', user_label_list=custom_label)
-    generate_and_evaluate('model/gan_final.pt', 'PG', user_label_list=custom_label)
+    evaluate_model('model/pre_train.pt', 'PRE', config, device, cond_mean, cond_std, args.n_cond, args.k_samples, args.top_m)
+    evaluate_model('model/gan_final.pt', 'PG', config, device, cond_mean, cond_std, args.n_cond, args.k_samples, args.top_m)

@@ -74,8 +74,15 @@ def _evaluate_single(args):
         return i, False
         
     # Calculate Cl via Xfoil
-    calc_cl = run_xfoil_single(coords, reynolds, alpha)
-    if calc_cl is None:
+    xfoil_res = run_xfoil_single(coords, reynolds, alpha, return_all=True)
+    if xfoil_res is None:
+        return i, False
+        
+    calc_cl = xfoil_res.get('CL', np.nan)
+    calc_cd = xfoil_res.get('CD', np.nan)
+    calc_cm = xfoil_res.get('CM', np.nan)
+    
+    if np.isnan(calc_cl) or np.isnan(calc_cd) or np.isnan(calc_cm):
         return i, False
         
     cl_res = abs(calc_cl - target_cl) / (abs(target_cl) + 1e-8)
@@ -85,7 +92,7 @@ def _evaluate_single(args):
     else:
         return i, False
 
-def evaluate_physics(fake_foils, conds, norm_stats, eps_cl, eps_t):
+def evaluate_physics(fake_foils, conds, norm_stats, eps_cl, eps_t, max_workers=16):
     """
     Evaluates generated foils using physics models.
     Splits indices into R_eps (reasonable) and F_eps (unreasonable).
@@ -114,7 +121,7 @@ def evaluate_physics(fake_foils, conds, norm_stats, eps_cl, eps_t):
         eval_args.append((i, coords, alpha, reynolds, target_cl, target_t, eps_cl, eps_t))
 
     # Run evaluations concurrently
-    with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(executor.map(_evaluate_single, eval_args))
         
     for idx, is_reasonable in results:
@@ -333,6 +340,7 @@ def train(resume_path=None):
     
     # Load norm stats
     norm_stats = torch.load("model/cond_norm.pt", map_location=device, weights_only=True)
+    max_workers = config['max_workers']
 
     # Initialize formal models
     generator = Generator(config).to(device)
@@ -430,7 +438,7 @@ def train(resume_path=None):
                 r_idx = []
                 f_idx = list(range(batch_size))
             else:
-                r_idx, f_idx = evaluate_physics(fake_foils, conds, norm_stats, curr_eps_cl, curr_eps_t)
+                r_idx, f_idx = evaluate_physics(fake_foils, conds, norm_stats, curr_eps_cl, curr_eps_t, max_workers=max_workers)
                 total_valid += len(r_idx)
 
             # Split fake_foils
@@ -501,7 +509,7 @@ def train(resume_path=None):
                 if epoch < pre_train_epoch:
                     f_idx_gen = list(range(batch_size))
                 else:
-                    _, f_idx_gen = evaluate_physics(fake_foil, conds, norm_stats, curr_eps_cl, curr_eps_t)
+                    _, f_idx_gen = evaluate_physics(fake_foil, conds, norm_stats, curr_eps_cl, curr_eps_t, max_workers=max_workers)
                 
                 if len(f_idx_gen) > 0:
                     f_foil_gen = fake_foil[f_idx_gen]
