@@ -8,10 +8,12 @@ import glob
 # Define relative paths from foildata/
 COORD_DIR = "processed_foil"
 POLAR_DIR = "polars"
-foil_n = 400
+TEMP_DIR = "temp_foils"
+foil_n = 600
 
-# Ensure output directory exists
+# Ensure output directories exist
 os.makedirs(os.path.join(os.path.dirname(__file__), POLAR_DIR), exist_ok=True)
+os.makedirs(os.path.join(os.path.dirname(__file__), TEMP_DIR), exist_ok=True)
 
 def load_config():
     root_dir = os.path.dirname(os.path.dirname(__file__))
@@ -20,7 +22,7 @@ def load_config():
         return yaml.safe_load(f)
 
 def get_re_list(config):
-    re_range = config.get('Re_range_step', [1e5, 8e5, 1e5])
+    re_range = config['Re_range_step']
     re_range = [float(x) for x in re_range]
     # [start, end, step] -> inclusive of end if possible
     return np.arange(re_range[0], re_range[1] + re_range[2]/2, re_range[2])
@@ -54,9 +56,10 @@ def _execute_xfoil(commands, cwd, timeout):
         stdout, stderr = process.communicate()
         return stdout, stderr, True
 
-def run_xfoil(airfoil_name, reynolds, alpha_start, alpha_end, alpha_step):
+def run_xfoil(airfoil_name, reynolds, alpha_start, alpha_end, alpha_step, timeout=10):
     """
     airfoil_name: .dat文件名
+    Returns: (success, is_timeout)
     """
     # Create a unique filename including Reynolds number
     # Remove .dat extension for the filename
@@ -88,12 +91,13 @@ def run_xfoil(airfoil_name, reynolds, alpha_start, alpha_end, alpha_step):
     """
 
     cwd = os.path.join(base_dir, COORD_DIR)
-    stdout, _, is_timeout = _execute_xfoil(commands, cwd, timeout=30)
+    _, _, is_timeout = _execute_xfoil(commands, cwd, timeout=timeout)
     
     if is_timeout:
-        print(f"警告: {airfoil_name} 在 Re={reynolds} 下计算超时(30秒)，已中断并跳过")
+        print(f"警告: {airfoil_name} 在 Re={reynolds} 下计算超时({timeout}秒)，已中断并跳过")
         
-    return stdout
+    success = os.path.exists(save_file_abs) and os.path.getsize(save_file_abs) > 0
+    return success, is_timeout
 
 def run_xfoil_single(coords, reynolds, alpha, timeout=3, return_all=False):
     """
@@ -107,9 +111,9 @@ def run_xfoil_single(coords, reynolds, alpha, timeout=3, return_all=False):
     # Generate unique filename for the temporary coordinates
     temp_filename = f"temp_foil_{uuid.uuid4().hex[:8]}.dat"
     base_dir = os.path.dirname(__file__)
-    coord_dir = os.path.join(base_dir, COORD_DIR)
-    os.makedirs(coord_dir, exist_ok=True)
-    temp_filepath = os.path.join(coord_dir, temp_filename)
+    temp_dir = os.path.join(base_dir, TEMP_DIR)
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_filepath = os.path.join(temp_dir, temp_filename)
     
     # Write coordinates to temp file
     try:
@@ -128,7 +132,7 @@ def run_xfoil_single(coords, reynolds, alpha, timeout=3, return_all=False):
         QUIT
         """
         
-        stdout, _, is_timeout = _execute_xfoil(commands, coord_dir, timeout=timeout)
+        stdout, _, is_timeout = _execute_xfoil(commands, temp_dir, timeout=timeout)
         
         if is_timeout:
             return None
@@ -184,6 +188,13 @@ def run_xfoil_single(coords, reynolds, alpha, timeout=3, return_all=False):
         if os.path.exists(temp_filepath):
             os.remove(temp_filepath)
 
+import concurrent.futures
+
+def _worker_run_xfoil(args):
+    foil, re, a_start, a_end, a_step, timeout = args
+    success, is_timeout = run_xfoil(foil, re, a_start, a_end, a_step, timeout)
+    return foil, re, success, is_timeout
+
 if __name__ == "__main__":
     config = load_config()
     
@@ -207,7 +218,37 @@ if __name__ == "__main__":
     print(f"Selected {len(selected_foils)} airfoils for analysis.")
     print(f"Reynolds numbers: {re_list}")
 
+    max_workers = config.get('max_workers')
+    tasks = []
     for foil in selected_foils:
         for re in re_list:
-            print(f"Processing Airfoil {foil} at Re={re:.1e}...")
-            run_xfoil(foil, re, a_start, a_end, a_step)
+            tasks.append((foil, re, a_start, a_end, a_step, 30))
+
+    print(f"Starting parallel analysis with {max_workers} workers...")
+    
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(_worker_run_xfoil, tasks))
+
+    # Summary reporting
+    timeouts = []
+    failures = []
+    for foil, re, success, is_timeout in results:
+        if is_timeout:
+            timeouts.append(f"{foil} (Re={re:.1e})")
+        elif not success:
+            failures.append(f"{foil} (Re={re:.1e})")
+
+    print("\n--- Analysis Summary ---")
+    print(f"Total tasks: {len(tasks)}")
+    print(f"Successful: {len(tasks) - len(timeouts) - len(failures)}")
+    
+    if timeouts:
+        print(f"\nTimeouts ({len(timeouts)}):")
+        for t in timeouts:
+            print(f"  - {t}")
+            
+    if failures:
+        print(f"\nFailures ({len(failures)}):")
+        for f in failures:
+            print(f"  - {f}")

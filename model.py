@@ -71,10 +71,10 @@ class BezierDecoderLayer(nn.Module):
 class Generator(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.noise_dim = config.get('noise_dimension')
-        self.cond_dim = config.get('cond_dim')
-        self.hid_node = config.get('gen_hid_node')
-        self.hid_layer = config.get('gen_hid_layer')
+        self.noise_dim = config['noise_dimension']
+        self.cond_dim = config['cond_dim']
+        self.hid_node = config['gen_hid_node']
+        self.hid_layer = config['gen_hid_layer']
         
         act_fun = nn.LeakyReLU(0.2)
             
@@ -87,10 +87,23 @@ class Generator(nn.Module):
             
         self.fc_blocks = nn.Sequential(*layers)
         
-        self.num_cp = config.get('num_control_points')
+        self.num_cp = config['num_control_points']
         self.out_layer = nn.Linear(self.hid_node, self.num_cp * 3)
         self.bezier_layer = BezierDecoderLayer(config)
-        self.register_buffer('fixed_pt', torch.tensor([1.0, 0.0]))
+        
+        # Determine normalized trailing edge y-coordinate
+        te_y_norm = 0.0
+        try:
+            # Try to load coordinate normalization parameters to adjust fixed_pt
+            # map_location='cpu' ensures it works even if saved from GPU
+            coord_norm = torch.load("model/coord_norm.pt", map_location='cpu', weights_only=True)
+            te_y_norm = (0.0 - coord_norm['mean']) / coord_norm['std']
+            print(f"Generator: Normalized TE y set to {te_y_norm:.4f}")
+        except Exception:
+            # Fallback to 0.0 if file not found (e.g., first run or missing stats)
+            pass
+            
+        self.register_buffer('fixed_pt', torch.tensor([1.0, te_y_norm], dtype=torch.float32))
 
     def forward(self, noise, cond):
         x = torch.cat([noise, cond], dim=1)
@@ -114,19 +127,19 @@ class Generator(nn.Module):
 class Discriminator(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.cond_dim = config.get('cond_dim')
-        self.num_pts = config.get('num_output_points')
+        self.cond_dim = config['cond_dim']
+        self.num_pts = config['num_output_points']
         self.input_dim = self.num_pts * 2
-        self.hid_node = config.get('dis_hid_node')
-        self.hid_layer = config.get('dis_hid_layer')
+        self.hid_node = config['dis_hid_node']
+        self.hid_layer = config['dis_hid_layer']
         
         # Conv layer parameters
-        self.conv_channels = config.get('disc_conv_channels')
-        self.kernel_size = config.get('disc_conv_kernel')
+        self.conv_channels = config['disc_conv_channels']
+        self.kernel_size = config['disc_conv_kernel']
         
-        self.conv2_kernel = config.get('disc_conv2_kernel')
-        self.conv2_channels = config.get('disc_conv2_channels')
-        self.conv2_stride = config.get('disc_conv2_stride')
+        self.conv2_kernel = config['disc_conv2_kernel']
+        self.conv2_channels = config['disc_conv2_channels']
+        self.conv2_stride = config['disc_conv2_stride']
         
         # Stage 1: Convolutional Feature Extraction
         self.conv1 = nn.Conv1d(in_channels=2, 

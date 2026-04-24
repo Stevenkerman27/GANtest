@@ -16,14 +16,7 @@ def visualize_discriminator_conv_weights(model_path=None):
         model_path = 'model/pre_train.pt'
     
     if not os.path.exists(model_path):
-        # Fallback for older separate files
-        old_path = 'model/discriminator.pth'
-        if model_path == 'model/gan_final.pt' and os.path.exists(old_path):
-            print(f"Warning: {model_path} not found, falling back to {old_path}")
-            model_path = old_path
-        else:
-            print(f"Error: {model_path} not found.")
-            return
+        raise FileNotFoundError(f"Model file not found: {model_path}")
     
     # Load checkpoint
     print(f"Loading weights from {model_path}")

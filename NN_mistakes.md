@@ -11,3 +11,5 @@ gradient_penalty = compute_gradient_penalty(D, real, f_foils, conds[:f_foils.siz
 ```python
 gradient_penalty = compute_gradient_penalty(D, foils[f_idx], f_foils, conds[f_idx])
 ```
+
+2. 未归一化/归一化不统一。原先代码未对翼型y坐标归一化

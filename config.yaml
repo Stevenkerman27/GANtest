@@ -14,8 +14,8 @@ disc_conv2_kernel: 11
 disc_conv2_channels: 4
 disc_conv2_stride: 3
 cond_dim: 4
-lr: 3e-4
-lr_phase2: 1e-4
+lr: 2e-4
+lr_phase2: 0
 epochs: 250
 pre_train_epoch: 200
 n_critic: 3

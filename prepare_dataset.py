@@ -148,12 +148,12 @@ if __name__ == '__main__':
     # 读取配置
     config_path = "config.yaml"
     max_cd = None
-    if os.path.exists(config_path):
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-            max_cd = config.get('max_Cd')
-            if max_cd is not None:
-                print(f"将过滤 CD > {max_cd} 的数据")
+    
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+        max_cd = config.get('max_Cd') # CD threshold can be optional
+        if max_cd is not None:
+            print(f"将过滤 CD > {max_cd} 的数据")
 
     # 按照当前目录结构设置路径
     processed_dir = os.path.join("foildata", "processed_foil")

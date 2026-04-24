@@ -92,7 +92,7 @@ def _evaluate_single(args):
     else:
         return i, False
 
-def evaluate_physics(fake_foils, conds, norm_stats, eps_cl, eps_t, max_workers=16):
+def evaluate_physics(fake_foils, conds, norm_stats, coord_norm_stats, eps_cl, eps_t, max_workers=16):
     """
     Evaluates generated foils using physics models.
     Splits indices into R_eps (reasonable) and F_eps (unreasonable).
@@ -108,17 +108,24 @@ def evaluate_physics(fake_foils, conds, norm_stats, eps_cl, eps_t, max_workers=1
     y_std = norm_stats['std'].to(conds.device)
     real_conds = conds * y_std + y_mean
     
+    # Un-normalize airfoil y-coordinates
+    coord_y_mean = coord_norm_stats['mean'].to(fake_foils.device)
+    coord_y_std = coord_norm_stats['std'].to(fake_foils.device)
+    
     # Prepare arguments for the worker pool
     eval_args = []
     for i in range(batch_size):
-        coords_flat = fake_foils[i].detach().cpu().numpy()
-        coords = coords_flat.reshape(num_pts, 2)
+        coords_flat = fake_foils[i].detach().clone()
+        # Un-normalize only y-coordinates (every 2nd element in flattened array)
+        coords_flat[1::2] = coords_flat[1::2] * coord_y_std + coord_y_mean
+        
+        coords_np = coords_flat.cpu().numpy().reshape(num_pts, 2)
         alpha = real_conds[i, 0].item()
         reynolds = real_conds[i, 1].item()
         target_cl = real_conds[i, 2].item()
         target_t = real_conds[i, 3].item()
         
-        eval_args.append((i, coords, alpha, reynolds, target_cl, target_t, eps_cl, eps_t))
+        eval_args.append((i, coords_np, alpha, reynolds, target_cl, target_t, eps_cl, eps_t))
 
     # Run evaluations concurrently
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -319,27 +326,30 @@ def train(resume_path=None):
     with open("config.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    device_cfg = config.get("device", "auto")
+    device_cfg = config["device"]
     if device_cfg.lower() == "cuda" and torch.cuda.is_available():
         device = torch.device("cuda")
     elif device_cfg.lower() == "cpu":
         device = torch.device("cpu")
-    else:
+    elif device_cfg.lower() == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        raise ValueError(f"Unknown device configuration: {device_cfg}")
     print(f"Using device: {device}")
     
     # Dataset & DataLoader
-    batch_size = config.get('batch_size', 16)
+    batch_size = config['batch_size']
     dataset = AirfoilDataset("model/airfoil_dataset.pt")
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-    epochs = config.get('epochs')
-    pre_train_epoch = config.get('pre_train_epoch')
-    n_critic = config.get('n_critic')
-    lambda_gp = config.get('lambda_gp')
+    epochs = config['epochs']
+    pre_train_epoch = config['pre_train_epoch']
+    n_critic = config['n_critic']
+    lambda_gp = config['lambda_gp']
     
     # Load norm stats
     norm_stats = torch.load("model/cond_norm.pt", map_location=device, weights_only=True)
+    coord_norm_stats = torch.load("model/coord_norm.pt", map_location=device, weights_only=True)
     max_workers = config['max_workers']
 
     # Initialize formal models
@@ -357,7 +367,7 @@ def train(resume_path=None):
         print(f"Skipping pre-training, starting from epoch {start_epoch}")
 
     # --- Phase 1 LR ---
-    phase1_lr = float(config.get('lr', 0.0))
+    phase1_lr = float(config['lr'])
     if phase1_lr <= 0.0 and start_epoch < pre_train_epoch:
         phase1_lr = run_lr_range_test(config, dataloader, device, phase=1)
     elif start_epoch >= pre_train_epoch:
@@ -367,10 +377,10 @@ def train(resume_path=None):
     optimizer_G = torch.optim.Adam(generator.parameters(), lr=phase1_lr, betas=(0.0, 0.9), weight_decay=5e-5)
     optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=phase1_lr, betas=(0.0, 0.9), weight_decay=5e-5)
     
-    eps_cl_start = config.get('eps_cl_start', 0.1)
-    eps_cl_end = config.get('eps_cl_end', 0.05)
-    eps_t_start = config.get('eps_t_start', 0.05)
-    eps_t_end = config.get('eps_t_end', 0.02)
+    eps_cl_start = config['eps_cl_start']
+    eps_cl_end = config['eps_cl_end']
+    eps_t_start = config['eps_t_start']
+    eps_t_end = config['eps_t_end']
 
     # Lists to keep track of progress
     d_losses = []
@@ -438,7 +448,7 @@ def train(resume_path=None):
                 r_idx = []
                 f_idx = list(range(batch_size))
             else:
-                r_idx, f_idx = evaluate_physics(fake_foils, conds, norm_stats, curr_eps_cl, curr_eps_t, max_workers=max_workers)
+                r_idx, f_idx = evaluate_physics(fake_foils, conds, norm_stats, coord_norm_stats, curr_eps_cl, curr_eps_t, max_workers=max_workers)
                 total_valid += len(r_idx)
 
             # Split fake_foils
@@ -509,7 +519,7 @@ def train(resume_path=None):
                 if epoch < pre_train_epoch:
                     f_idx_gen = list(range(batch_size))
                 else:
-                    _, f_idx_gen = evaluate_physics(fake_foil, conds, norm_stats, curr_eps_cl, curr_eps_t, max_workers=max_workers)
+                    _, f_idx_gen = evaluate_physics(fake_foil, conds, norm_stats, coord_norm_stats, curr_eps_cl, curr_eps_t, max_workers=max_workers)
                 
                 if len(f_idx_gen) > 0:
                     f_foil_gen = fake_foil[f_idx_gen]

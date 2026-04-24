@@ -73,11 +73,6 @@ def resample_airfoils(source_dir, target_dir):
     with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
         
-    if 'num_output_points' not in config:
-        raise KeyError("'num_output_points' must be specified in config.yaml")
-    if 'point_density_beta' not in config:
-        raise KeyError("'point_density_beta' must be specified in config.yaml")
-        
     num_points = config['num_output_points']
     beta = config['point_density_beta']
             

@@ -74,11 +74,10 @@ def _worker_eval_xfoil(args):
         'alpha': alpha_input, 're': re_input, 'target_thick': target_thick, 'target_cl': target_cl
     }
 
-def evaluate_model(model_path, tag, config, device, cond_mean, cond_std, n_cond, k_samples, top_m):
+def evaluate_model(model_path, tag, config, device, cond_mean, cond_std, coord_norm_stats, n_cond, k_samples, top_m):
     print(f"\n--- Evaluating {tag} model: {model_path} ---")
     if not os.path.exists(model_path):
-        print(f"Model {model_path} not found. Skipping.")
-        return
+        raise FileNotFoundError(f"Model {model_path} not found.")
 
     generator = Generator(config).to(device)
     checkpoint = torch.load(model_path, map_location=device, weights_only=True)
@@ -88,13 +87,17 @@ def evaluate_model(model_path, tag, config, device, cond_mean, cond_std, n_cond,
         generator.load_state_dict(checkpoint)
     generator.eval()
 
+    # Load coordinate normalization stats
+    coord_y_mean = coord_norm_stats['mean'].to(device)
+    coord_y_std = coord_norm_stats['std'].to(device)
+
     # Generate LHS samples
     sampler = qmc.LatinHypercube(d=4)
     sample = sampler.random(n=n_cond)
     cond_samples = qmc.scale(sample, BOUNDS[:, 0], BOUNDS[:, 1])
 
-    noise_dim = config.get('noise_dimension', 6)
-    num_output_points = config.get('num_output_points', 100)
+    noise_dim = config['noise_dimension']
+    num_output_points = config['num_output_points']
 
     all_eval_tasks = []
     
@@ -110,6 +113,11 @@ def evaluate_model(model_path, tag, config, device, cond_mean, cond_std, n_cond,
         
         with torch.no_grad():
             gen_out = generator(noise, norm_cond)
+            
+        # Un-normalize y-coordinates: gen_out shape is (Batch, num_output_points * 2)
+        # Flattened format is x, y, x, y...
+        gen_out[:, 1::2] = gen_out[:, 1::2] * coord_y_std + coord_y_mean
+        
         gen_airfoils = gen_out.view(k_samples, num_output_points, 2).cpu().numpy()
         
         for k in range(k_samples):
@@ -180,8 +188,9 @@ if __name__ == '__main__':
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     norm_params = torch.load('model/cond_norm.pt', map_location=device, weights_only=True)
+    coord_norm_stats = torch.load('model/coord_norm.pt', map_location=device, weights_only=True)
     cond_mean = norm_params['mean'].to(device)
     cond_std = norm_params['std'].to(device)
 
-    evaluate_model('model/pre_train.pt', 'PRE', config, device, cond_mean, cond_std, args.n_cond, args.k_samples, args.top_m)
-    evaluate_model('model/gan_final.pt', 'PG', config, device, cond_mean, cond_std, args.n_cond, args.k_samples, args.top_m)
+    evaluate_model('model/pre_train.pt', 'PRE', config, device, cond_mean, cond_std, coord_norm_stats, args.n_cond, args.k_samples, args.top_m)
+    evaluate_model('model/gan_final.pt', 'PG', config, device, cond_mean, cond_std, coord_norm_stats, args.n_cond, args.k_samples, args.top_m)
