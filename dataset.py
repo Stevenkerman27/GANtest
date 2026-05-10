@@ -5,32 +5,39 @@ class AirfoilDataset(Dataset):
     def __init__(self, data_path, cond_norm_path="model/cond_norm.pt", coord_norm_path="model/coord_norm.pt"):
         raw_data = torch.load(data_path)
         
-        # 1. Normalize conditions (labels)
-        y_all = torch.stack([item['y'] for item in raw_data])
+        # 1. Normalize conditions (labels) - Keep Z-score for conditions
+        # Ensure floating point for mean/std calculation
+        y_all = torch.stack([item['y'] for item in raw_data]).float()
         self.y_mean = y_all.mean(dim=0)
         self.y_std = y_all.std(dim=0) + 1e-8
         
         # Save condition normalization parameters
         torch.save({'mean': self.y_mean, 'std': self.y_std}, cond_norm_path)
         
-        # 2. Normalize airfoil y-coordinates (features)
-        coords_all = torch.stack([item['x'] for item in raw_data]) # (N, M*2)
+        # 2. Normalize airfoil coordinates (Min-Max)
+        coords_all = torch.stack([item['x'] for item in raw_data]).float() # (N, M*2)
         coords_all = coords_all.view(coords_all.size(0), -1, 2)
-        y_coords = coords_all[:, :, 1]
-        self.coord_y_mean = y_coords.mean()
-        self.coord_y_std = y_coords.std() + 1e-8
+        
+        self.x_min = coords_all[:, :, 0].min()
+        self.x_max = coords_all[:, :, 0].max()
+        self.y_min = coords_all[:, :, 1].min()
+        self.y_max = coords_all[:, :, 1].max()
         
         # Save coordinate normalization parameters
-        torch.save({'mean': self.coord_y_mean, 'std': self.coord_y_std}, coord_norm_path)
+        torch.save({
+            'x_min': self.x_min, 'x_max': self.x_max,
+            'y_min': self.y_min, 'y_max': self.y_max
+        }, coord_norm_path)
         
         self.data = []
         for item in raw_data:
             # Normalize conditions
-            norm_y = (item['y'] - self.y_mean) / self.y_std
+            norm_y = (item['y'].float() - self.y_mean) / self.y_std
             
-            # Normalize only y-coordinates in x feature
-            c = item['x'].clone().view(-1, 2)
-            c[:, 1] = (c[:, 1] - self.coord_y_mean) / self.coord_y_std
+            # Normalize x and y independently
+            c = item['x'].float().clone().view(-1, 2)
+            c[:, 0] = (c[:, 0] - self.x_min) / (self.x_max - self.x_min + 1e-8)
+            c[:, 1] = (c[:, 1] - self.y_min) / (self.y_max - self.y_min + 1e-8)
             norm_x = c.view(-1)
             
             self.data.append({
@@ -43,3 +50,20 @@ class AirfoilDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.data[idx]['x'], self.data[idx]['y']
+
+if __name__ == "__main__":
+    import os
+    data_path = "model/airfoil_dataset.pt"
+    if os.path.exists(data_path):
+        print(f"Initializing dataset from {data_path}...")
+        ds = AirfoilDataset(data_path)
+        print("Dataset initialized and stats saved to model/cond_norm.pt and model/coord_norm.pt")
+        
+        # Verify stats
+        coord_stats = torch.load("model/coord_norm.pt")
+        print(f"Coord stats: {coord_stats}")
+        
+        x_sample, y_sample = ds[0]
+        print(f"Sample x range: [{x_sample.min():.4f}, {x_sample.max():.4f}]")
+    else:
+        print(f"Error: {data_path} not found. Run prepare_dataset.py first.")

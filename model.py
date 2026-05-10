@@ -91,19 +91,30 @@ class Generator(nn.Module):
         self.out_layer = nn.Linear(self.hid_node, self.num_cp * 3)
         self.bezier_layer = BezierDecoderLayer(config)
         
-        # Determine normalized trailing edge y-coordinate
+        # Determine normalized trailing edge (1.0, 0.0)
+        te_x_norm = 1.0
         te_y_norm = 0.0
         try:
             # Try to load coordinate normalization parameters to adjust fixed_pt
             # map_location='cpu' ensures it works even if saved from GPU
             coord_norm = torch.load("model/coord_norm.pt", map_location='cpu', weights_only=True)
-            te_y_norm = (0.0 - coord_norm['mean']) / coord_norm['std']
-            print(f"Generator: Normalized TE y set to {te_y_norm:.4f}")
+            
+            if 'x_min' in coord_norm:
+                # New Min-Max normalization
+                x_min, x_max = coord_norm['x_min'], coord_norm['x_max']
+                y_min, y_max = coord_norm['y_min'], coord_norm['y_max']
+                te_x_norm = (1.0 - x_min) / (x_max - x_min + 1e-8)
+                te_y_norm = (0.0 - y_min) / (y_max - y_min + 1e-8)
+                print(f"Generator: Normalized TE set to ({te_x_norm:.4f}, {te_y_norm:.4f})")
+            else:
+                # Fallback for old Z-score normalization
+                te_y_norm = (0.0 - coord_norm['mean']) / coord_norm['std']
+                print(f"Generator: Normalized TE y set to {te_y_norm:.4f} (Z-score fallback)")
         except Exception:
-            # Fallback to 0.0 if file not found (e.g., first run or missing stats)
+            # Fallback to defaults if file not found
             pass
             
-        self.register_buffer('fixed_pt', torch.tensor([1.0, te_y_norm], dtype=torch.float32))
+        self.register_buffer('fixed_pt', torch.tensor([te_x_norm, te_y_norm], dtype=torch.float32))
 
     def forward(self, noise, cond):
         x = torch.cat([noise, cond], dim=1)

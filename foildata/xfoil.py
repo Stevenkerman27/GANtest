@@ -99,7 +99,7 @@ def run_xfoil(airfoil_name, reynolds, alpha_start, alpha_end, alpha_step, timeou
     success = os.path.exists(save_file_abs) and os.path.getsize(save_file_abs) > 0
     return success, is_timeout
 
-def run_xfoil_single(coords, reynolds, alpha, timeout=3, return_all=False):
+def run_xfoil_single(coords, reynolds, alpha, timeout=2, return_all=False):
     """
     Evaluates a single airfoil using Xfoil.
     Returns the Cl value if successful (or a dict of CL, CD, CM if return_all=True), 

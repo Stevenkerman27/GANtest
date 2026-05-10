@@ -108,22 +108,30 @@ def evaluate_physics(fake_foils, conds, norm_stats, coord_norm_stats, eps_cl, ep
     y_std = norm_stats['std'].to(conds.device)
     real_conds = conds * y_std + y_mean
     
-    # Un-normalize airfoil y-coordinates
-    coord_y_mean = coord_norm_stats['mean'].to(fake_foils.device)
-    coord_y_std = coord_norm_stats['std'].to(fake_foils.device)
+    # Un-normalize airfoil coordinates
+    x_min = coord_norm_stats['x_min'].to(fake_foils.device)
+    x_max = coord_norm_stats['x_max'].to(fake_foils.device)
+    y_min = coord_norm_stats['y_min'].to(fake_foils.device)
+    y_max = coord_norm_stats['y_max'].to(fake_foils.device)
+    
+    # Batch un-normalization to avoid CPU-GPU sync per item
+    coords_unnorm = fake_foils.detach().clone().view(batch_size, -1, 2)
+    coords_unnorm[:, :, 0] = coords_unnorm[:, :, 0] * (x_max - x_min + 1e-8) + x_min
+    coords_unnorm[:, :, 1] = coords_unnorm[:, :, 1] * (y_max - y_min + 1e-8) + y_min
     
     # Prepare arguments for the worker pool
     eval_args = []
+    
+    coords_np_all = coords_unnorm.cpu().numpy()
+    
+    real_conds_np = real_conds.cpu().numpy()
+    
     for i in range(batch_size):
-        coords_flat = fake_foils[i].detach().clone()
-        # Un-normalize only y-coordinates (every 2nd element in flattened array)
-        coords_flat[1::2] = coords_flat[1::2] * coord_y_std + coord_y_mean
-        
-        coords_np = coords_flat.cpu().numpy().reshape(num_pts, 2)
-        alpha = real_conds[i, 0].item()
-        reynolds = real_conds[i, 1].item()
-        target_cl = real_conds[i, 2].item()
-        target_t = real_conds[i, 3].item()
+        coords_np = coords_np_all[i]
+        alpha = real_conds_np[i, 0].item()
+        reynolds = real_conds_np[i, 1].item()
+        target_cl = real_conds_np[i, 2].item()
+        target_t = real_conds_np[i, 3].item()
         
         eval_args.append((i, coords_np, alpha, reynolds, target_cl, target_t, eps_cl, eps_t))
 
